@@ -1,0 +1,8 @@
+/node_modules/
+/vendor/
+.DS_Store
+.vscode/
+.idea/
+*.log
+wp-config.php
+includes/vendor/maxmind-db-reader/data/

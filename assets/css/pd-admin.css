@@ -1,0 +1,21 @@
+/* PesaDonations Admin Styles */
+
+.pd-admin-cards {
+	display: flex;
+	gap: 16px;
+	flex-wrap: wrap;
+	margin: 20px 0;
+}
+.pd-admin-card {
+	background: #fff;
+	border: 1px solid #e0e0e0;
+	border-radius: 8px;
+	padding: 20px 28px;
+	min-width: 160px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+.pd-admin-card__value { font-size: 28px; font-weight: 700; color: #2e7d32; }
+.pd-admin-card__label { font-size: 13px; color: #666; }
