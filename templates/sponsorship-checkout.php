@@ -368,20 +368,33 @@ $config = wp_json_encode( [
 				<input type="checkbox" x-model="formData.agree_terms"
 				       :class="{ 'pd-input--error': errors.agree_terms }" />
 				<?php
-				$terms_url    = get_privacy_policy_url();
-				$terms_label  = __( "I understand and agree to %s's Terms & Conditions for Donation Payments", 'pesa-donations' );
-				$site_name    = get_bloginfo( 'name' );
+				$terms_url   = (string) get_option( 'pd_terms_url', '' );
+				if ( ! $terms_url ) {
+					$terms_url = (string) get_privacy_policy_url();
+				}
+				$site_name      = get_bloginfo( 'name' );
+				$terms_link_txt = __( 'Terms & Conditions for Donation Payments', 'pesa-donations' );
+
 				if ( $terms_url ) {
 					printf(
+						/* translators: 1: site name, 2: anchor link to T&C */
 						wp_kses(
-							sprintf( $terms_label, '<a href="%s" target="_blank">%s</a>' ),
-							[ 'a' => [ 'href' => [], 'target' => [] ] ]
+							__( "I understand and agree to %1\$s's %2\$s", 'pesa-donations' ),
+							[]
 						),
-						esc_url( $terms_url ),
-						esc_html( $site_name )
+						esc_html( $site_name ),
+						sprintf(
+							'<a href="%1$s" target="_blank" rel="noopener" class="pd-terms-link">%2$s</a>',
+							esc_url( $terms_url ),
+							esc_html( $terms_link_txt )
+						)
 					);
 				} else {
-					printf( esc_html( $terms_label ), esc_html( $site_name ) );
+					printf(
+						esc_html__( "I understand and agree to %1\$s's %2\$s", 'pesa-donations' ),
+						esc_html( $site_name ),
+						esc_html( $terms_link_txt )
+					);
 				}
 				?>
 			</label>

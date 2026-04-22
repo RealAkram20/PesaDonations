@@ -166,6 +166,13 @@ class Settings {
 	private function render_advanced(): void {
 		$this->input( 'pd_log_retention_days', __( 'Log Retention (days)', 'pesa-donations' ), 'number', __( 'Gateway logs older than this are automatically deleted.', 'pesa-donations' ) );
 
+		$this->input(
+			'pd_terms_url',
+			__( 'Terms & Conditions URL', 'pesa-donations' ),
+			'url',
+			__( 'Link shown on the checkout next to the agreement checkbox. Leave blank to fall back to the WordPress Privacy Policy page.', 'pesa-donations' )
+		);
+
 		$this->color_picker(
 			'pd_brand_color',
 			__( 'Brand Color', 'pesa-donations' ),
@@ -754,10 +761,19 @@ class Settings {
 			'pd_pesapal_consumer_secret', 'pd_paypal_environment', 'pd_paypal_client_id',
 			'pd_paypal_client_secret', 'pd_paypal_integration', 'pd_email_from_name',
 			'pd_email_from_address', 'pd_log_retention_days', 'pd_admin_alert_email',
+			'pd_terms_url',
 		];
+		$url_fields = [ 'pd_terms_url' ];
+
 		foreach ( $fields as $field ) {
-			if ( isset( $_POST[ $field ] ) ) {
-				update_option( $field, sanitize_text_field( wp_unslash( $_POST[ $field ] ) ) );
+			if ( ! isset( $_POST[ $field ] ) ) {
+				continue;
+			}
+			$raw = wp_unslash( $_POST[ $field ] );
+			if ( in_array( $field, $url_fields, true ) ) {
+				update_option( $field, esc_url_raw( $raw ) );
+			} else {
+				update_option( $field, sanitize_text_field( $raw ) );
 			}
 		}
 

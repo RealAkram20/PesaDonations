@@ -946,6 +946,26 @@
 .pd-toggle input:checked + .pd-toggle__slider::before { transform: translateX(20px) !important; }
 .pd-toggle__label { font-size: 14px !important; font-weight: 600 !important; }
 
+/* ---- Inline terms link in checkout ------------------------------------- */
+.pd-terms-link {
+	color: var(--pd-coral) !important;
+	font-weight: 600 !important;
+	text-decoration: none !important;
+	border-bottom: 1px solid currentColor !important;
+	padding-bottom: 1px !important;
+	transition: color var(--pd-transition), border-color var(--pd-transition) !important;
+}
+.pd-terms-link:hover,
+.pd-terms-link:focus {
+	color: var(--pd-coral-dark) !important;
+	border-color: var(--pd-coral-dark) !important;
+	text-decoration: none !important;
+}
+.pd-terms-link:focus-visible {
+	outline: 2px solid rgba(233, 78, 78, .35) !important;
+	outline-offset: 2px !important;
+}
+
 /* ---- Checkboxes --------------------------------------------------------- */
 .pd-form-field--checkbox label {
 	display: flex;
