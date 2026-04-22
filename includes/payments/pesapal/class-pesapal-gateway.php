@@ -37,7 +37,7 @@ class Pesapal_Gateway extends Abstract_Gateway {
 		$campaign_id = $donation->get_campaign_id();
 		$callback_url = add_query_arg( [
 			'pd_callback' => 1,
-			'd'           => $donation->get_uuid(),
+			'pd_d'        => $donation->get_uuid(),
 		], home_url( '/' ) );
 
 		$payload = [

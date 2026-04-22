@@ -10,13 +10,44 @@ class PD_Public {
 		( new Ajax_Handler() )->register();
 
 		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_assets' ] );
-		add_action( 'template_redirect',  [ $this, 'handle_pesapal_callback' ] );
+		// PesaPal callback is handled by Pesapal_IPN::handle_callback_redirect.
 
 		// wp_texturize mangles the closing `"` of Alpine attributes into curly
 		// quotes. Hook late on every filter that could emit our shortcode HTML.
 		add_filter( 'the_content',  [ $this, 'fix_alpine_attribute_quotes' ], 999 );
 		add_filter( 'render_block', [ $this, 'fix_alpine_attribute_quotes' ], 999 );
 		add_filter( 'do_shortcode_tag', [ $this, 'fix_alpine_attribute_quotes' ], 999 );
+
+		// Strip <p> wrappers + <br> that wpautop sometimes injects around our
+		// shortcode output when multiple shortcodes share a page. Our output is
+		// already valid HTML — auto-paragraphing breaks the layout.
+		add_filter( 'the_content', [ $this, 'unwrap_shortcode_paragraphs' ], 12 );
+	}
+
+	/**
+	 * Remove stray <p>...</p> wrappers and <br> tags that wpautop inserts
+	 * around (or between) our shortcodes. Runs AFTER shortcodes have been
+	 * expanded (priority 12 — do_shortcode is 11).
+	 */
+	public function unwrap_shortcode_paragraphs( string $content ): string {
+		$containers = [ 'pd-slider', 'pd-browse', 'pd-checkout', 'pd-thanks', 'pd-donate-btn-wrap' ];
+
+		foreach ( $containers as $class ) {
+			// Remove <p> or <br> immediately BEFORE our container's opening tag.
+			$content = preg_replace(
+				'#(<p[^>]*>\s*|<br\s*/?>\s*)+(<div class="' . preg_quote( $class, '#' ) . ')#',
+				'$2',
+				$content
+			);
+			// Remove </p> / <br> immediately AFTER a closing </div> that ends our container
+			// (heuristic: an orphan </p> or <br> right after our component).
+			$content = preg_replace(
+				'#(</div>)\s*(</p>|<br\s*/?>)#',
+				'$1',
+				$content
+			);
+		}
+		return $content;
 	}
 
 	/**
@@ -43,21 +74,34 @@ class PD_Public {
 			return;
 		}
 
+		// Use filemtime() as the asset version so browsers always fetch the
+		// latest file after we push updates (no stale caches between releases).
+		$css_path = PD_PLUGIN_DIR . 'assets/css/pd-public.css';
+		$js_path  = PD_PLUGIN_DIR . 'assets/js/pd-public.js';
+		$css_ver  = file_exists( $css_path ) ? (string) filemtime( $css_path ) : PD_VERSION;
+		$js_ver   = file_exists( $js_path )  ? (string) filemtime( $js_path )  : PD_VERSION;
+
 		wp_enqueue_style(
 			'pd-public',
 			PD_PLUGIN_URL . 'assets/css/pd-public.css',
 			[],
-			PD_VERSION
+			$css_ver
 		);
 
+		// Admin brand color → live CSS variables. Attached AFTER pd-public.css
+		// so it naturally wins in the cascade (same specificity + !important).
+		$custom_vars = $this->build_custom_vars();
+		if ( $custom_vars ) {
+			wp_add_inline_style( 'pd-public', $custom_vars );
+		}
+
 		// pd-public.js MUST load before alpine.min.js so the component
-		// functions (pdCheckout, pdSponsorshipList, pdDonateButton) are on
-		// window before Alpine scans the DOM.
+		// functions are on window before Alpine scans the DOM.
 		wp_enqueue_script(
 			'pd-public',
 			PD_PLUGIN_URL . 'assets/js/pd-public.js',
 			[],
-			PD_VERSION,
+			$js_ver,
 			true
 		);
 
@@ -77,12 +121,68 @@ class PD_Public {
 		] );
 	}
 
+	/**
+	 * Generates inline CSS overriding --pd-coral family from saved admin
+	 * settings. Returns empty string if no valid brand color is set.
+	 */
+	private function build_custom_vars(): string {
+		$hex = (string) get_option( 'pd_brand_color', '' );
+		if ( ! preg_match( '/^#[0-9a-fA-F]{6}$/', $hex ) ) {
+			return '';
+		}
+
+		$alpha = max( 0, min( 100, (int) get_option( 'pd_brand_color_alpha', 100 ) ) );
+
+		// Derived variants:
+		//   --pd-coral       = admin choice
+		//   --pd-coral-dark  = 18% darker (for hover / active states)
+		//   --pd-coral-soft  = 10%-alpha tint of the color (for soft backgrounds)
+		$dark = $this->darken_hex( $hex, 18 );
+		$soft = $this->hex_to_rgba( $hex, 10 );
+
+		// If admin chose alpha < 100, apply it to the primary color too.
+		$primary = 100 === $alpha ? $hex : $this->hex_to_rgba( $hex, $alpha );
+
+		return ":root {
+			--pd-coral:      {$primary} !important;
+			--pd-coral-dark: {$dark} !important;
+			--pd-coral-soft: {$soft} !important;
+		}";
+	}
+
+	/**
+	 * Returns a darker version of a hex color by multiplying each channel
+	 * by (1 - percent/100). Simple and predictable for UI purposes.
+	 */
+	private function darken_hex( string $hex, int $percent ): string {
+		$hex    = ltrim( $hex, '#' );
+		$factor = ( 100 - max( 0, min( 100, $percent ) ) ) / 100;
+		$r      = (int) max( 0, hexdec( substr( $hex, 0, 2 ) ) * $factor );
+		$g      = (int) max( 0, hexdec( substr( $hex, 2, 2 ) ) * $factor );
+		$b      = (int) max( 0, hexdec( substr( $hex, 4, 2 ) ) * $factor );
+		return sprintf( '#%02x%02x%02x', $r, $g, $b );
+	}
+
+	private function hex_to_rgba( string $hex, int $alpha_percent ): string {
+		$hex = ltrim( $hex, '#' );
+		$r   = hexdec( substr( $hex, 0, 2 ) );
+		$g   = hexdec( substr( $hex, 2, 2 ) );
+		$b   = hexdec( substr( $hex, 4, 2 ) );
+		$a   = max( 0, min( 100, $alpha_percent ) ) / 100;
+		return sprintf( 'rgba(%d,%d,%d,%s)', $r, $g, $b, rtrim( rtrim( number_format( $a, 2, '.', '' ), '0' ), '.' ) ?: '0' );
+	}
+
 	private function page_has_shortcode(): bool {
 		global $post;
 		if ( ! $post ) {
 			return false;
 		}
-		$shortcodes = [ 'pd_donate_button', 'pd_sponsorships', 'pd_projects', 'pd_sponsor_browse', 'pd_give_browse', 'pd_campaign', 'pd_campaign_list', 'pd_checkout', 'pd_progress', 'pd_thank_you' ];
+		$shortcodes = [
+			'pd_donate_button',
+			'pd_sponsor_browse', 'pd_give_browse',
+			'pd_sponsor_slider', 'pd_give_slider',
+			'pd_checkout', 'pd_thank_you',
+		];
 		foreach ( $shortcodes as $sc ) {
 			if ( has_shortcode( $post->post_content, $sc ) ) {
 				return true;
@@ -91,13 +191,4 @@ class PD_Public {
 		return false;
 	}
 
-	public function handle_pesapal_callback(): void {
-		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		if ( ! isset( $_GET['pd_callback'] ) || ! isset( $_GET['d'] ) ) {
-			return;
-		}
-		$uuid = sanitize_text_field( wp_unslash( $_GET['d'] ) );
-		( new \PesaDonations\Frontend\Campaign_Display() )->render_callback( $uuid );
-		exit;
-	}
 }

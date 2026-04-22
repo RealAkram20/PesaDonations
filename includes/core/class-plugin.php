@@ -9,6 +9,7 @@ use PesaDonations\Frontend\PD_Public;
 use PesaDonations\Payments\Gateway_Manager;
 use PesaDonations\Payments\Pesapal\Pesapal_Gateway;
 use PesaDonations\Payments\Pesapal\Pesapal_IPN;
+use PesaDonations\Modules\Email_Notifications\Email_Notifications;
 
 class Plugin {
 
@@ -35,11 +36,21 @@ class Plugin {
 
 		add_action( 'plugins_loaded', [ $this, 'load_public' ] );
 		add_action( 'plugins_loaded', [ $this, 'load_gateways' ] );
+		add_action( 'plugins_loaded', [ $this, 'load_modules' ] );
+		add_action( 'plugins_loaded', [ $this, 'load_cron' ] );
 	}
 
 	public function load_gateways(): void {
 		Gateway_Manager::register( new Pesapal_Gateway() );
 		( new Pesapal_IPN() )->register();
+	}
+
+	public function load_modules(): void {
+		( new Email_Notifications() )->register();
+	}
+
+	public function load_cron(): void {
+		( new Cron() )->register();
 	}
 
 	/**

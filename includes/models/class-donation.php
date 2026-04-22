@@ -81,4 +81,6 @@ class Donation {
 	public function get_merchant_reference(): string { return (string) $this->data['merchant_reference']; }
 	public function get_donor_email(): string { return (string) $this->data['donor_email']; }
 	public function get_donor_name(): string { return (string) $this->data['donor_name']; }
+	public function get_completed_at(): string { return (string) ( $this->data['completed_at'] ?? '' ); }
+	public function get_created_at(): string { return (string) ( $this->data['created_at'] ?? '' ); }
 }

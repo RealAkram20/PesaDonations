@@ -65,11 +65,13 @@ class Pesapal_IPN {
 	 */
 	public function handle_callback_redirect(): void {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		if ( empty( $_GET['pd_callback'] ) || empty( $_GET['d'] ) ) {
+		// Support both 'pd_d' (current) and 'd' (legacy) for safety.
+		$uuid_raw = $_GET['pd_d'] ?? ( $_GET['d'] ?? '' );
+		if ( empty( $_GET['pd_callback'] ) || empty( $uuid_raw ) ) {
 			return;
 		}
 
-		$uuid = sanitize_text_field( wp_unslash( $_GET['d'] ) );
+		$uuid = sanitize_text_field( wp_unslash( $uuid_raw ) );
 		$donation = Donation::get_by_uuid( $uuid );
 		if ( ! $donation ) {
 			wp_die( esc_html__( 'Invalid donation reference.', 'pesa-donations' ) );
@@ -81,8 +83,8 @@ class Pesapal_IPN {
 
 		$thank_you_id = (int) get_option( 'pd_thank_you_page_id' );
 		$redirect = $thank_you_id
-			? add_query_arg( 'd', $uuid, get_permalink( $thank_you_id ) )
-			: home_url( '/?pd_thankyou=1&d=' . $uuid );
+			? add_query_arg( 'pd_d', $uuid, get_permalink( $thank_you_id ) )
+			: home_url( '/?pd_thankyou=1&pd_d=' . $uuid );
 
 		// Output an HTML page that breaks out of the iframe if loaded inside one.
 		// When user completes (or cancels) payment in the iframe popup, PesaPal
@@ -156,11 +158,23 @@ body { font-family: system-ui, sans-serif; display: flex; align-items: center; j
 
 		$donation->update( $update );
 
-		// Update donor aggregates + bust progress cache.
-		if ( 'completed' === $result['status'] ) {
+		// Refresh donor aggregates whenever the status changes.
+		global $wpdb;
+		$donor_id = (int) $wpdb->get_var( $wpdb->prepare(
+			"SELECT donor_id FROM {$wpdb->prefix}pd_donations WHERE id = %d",
+			$donation->get_id()
+		) );
+		if ( $donor_id ) {
+			\PesaDonations\Models\Donor::recalculate( $donor_id );
+		}
+
+		// Bust campaign progress caches when a donation completes or reverses.
+		if ( in_array( $result['status'], [ 'completed', 'reversed' ], true ) ) {
 			delete_transient( 'pd_raised_' . $donation->get_campaign_id() );
 			delete_transient( 'pd_donors_' . $donation->get_campaign_id() );
+		}
 
+		if ( 'completed' === $result['status'] ) {
 			do_action( 'pd_donation_completed', $donation );
 		} elseif ( 'failed' === $result['status'] ) {
 			do_action( 'pd_donation_failed', $donation );

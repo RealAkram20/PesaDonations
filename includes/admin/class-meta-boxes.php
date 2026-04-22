@@ -10,6 +10,49 @@ class Meta_Boxes {
 	public function register(): void {
 		add_action( 'add_meta_boxes', [ $this, 'add' ] );
 		add_action( 'save_post_' . Campaign_CPT::POST_TYPE, [ $this, 'save' ], 10, 2 );
+		add_action( 'admin_footer-post.php',     [ $this, 'print_type_toggle_js' ] );
+		add_action( 'admin_footer-post-new.php', [ $this, 'print_type_toggle_js' ] );
+	}
+
+	/**
+	 * Hide meta boxes that aren't relevant for the chosen campaign type.
+	 * Runs on the campaign editor screen only.
+	 */
+	public function print_type_toggle_js(): void {
+		$screen = get_current_screen();
+		if ( ! $screen || Campaign_CPT::POST_TYPE !== $screen->post_type ) {
+			return;
+		}
+		?>
+		<script>
+		(function($){
+			$(function(){
+				var $cat = $('#_pd_category');
+				if (!$cat.length) return;
+
+				// Meta box IDs grouped by the type they belong to.
+				var sponsorshipBoxes = ['#pd_beneficiary', '#pd_sponsorship_settings'];
+				var projectBoxes     = ['#pd_gallery'];
+
+				function applyVisibility() {
+					var type = $cat.val();
+					var showSponsorship = (type === 'sponsorship');
+					var showProject     = (type === 'project');
+
+					$.each(sponsorshipBoxes, function(_, sel) {
+						$(sel).toggle(showSponsorship);
+					});
+					$.each(projectBoxes, function(_, sel) {
+						$(sel).toggle(showProject);
+					});
+				}
+
+				$cat.on('change', applyVisibility);
+				applyVisibility();
+			});
+		})(jQuery);
+		</script>
+		<?php
 	}
 
 	public function add(): void {
@@ -216,16 +259,25 @@ class Meta_Boxes {
 
 	public function render_shortcodes( \WP_Post $post ): void {
 		$id = $post->ID;
+		$category = get_post_meta( $id, '_pd_category', true ) ?: 'project';
+
+		// Context-aware: show the most relevant shortcodes for this campaign type.
 		$codes = [
 			"[pd_donate_button id=\"{$id}\"]",
-			"[pd_sponsorships]",
-			"[pd_projects]",
-			"[pd_progress id=\"{$id}\"]",
 		];
+		if ( 'sponsorship' === $category ) {
+			$codes[] = '[pd_sponsor_browse]';
+			$codes[] = '[pd_sponsor_slider]';
+		} else {
+			$codes[] = '[pd_give_browse]';
+			$codes[] = '[pd_give_slider]';
+		}
+
 		echo '<p>' . esc_html__( 'Copy and paste these into any page or post:', 'pesa-donations' ) . '</p>';
 		foreach ( $codes as $code ) {
-			echo '<p><code style="user-select:all;display:block;padding:4px 8px;">' . esc_html( $code ) . '</code></p>';
+			echo '<p><code style="user-select:all;display:block;padding:6px 8px;font-size:12px;">' . esc_html( $code ) . '</code></p>';
 		}
+		echo '<p class="description">' . esc_html__( 'See the Shortcodes tab in Settings for the full reference.', 'pesa-donations' ) . '</p>';
 	}
 
 	// -------------------------------------------------------------------------

@@ -51,40 +51,56 @@ $config = wp_json_encode( [
 		: __( 'You are donating to:', 'pesa-donations' );
 	?>
 
+	<?php
+	// Split name into first + rest (e.g. "Robinah Nabuti" → "Robinah" + "Nabuti")
+	// so we can render them at different weights for an editorial feel.
+	$name_parts = preg_split( '/\s+/', trim( $hero_title ), 2 );
+	$name_first = $name_parts[0] ?? '';
+	$name_rest  = $name_parts[1] ?? '';
+	$story_label = $is_sponsorship && $name_first
+		? sprintf( '%s\'s story', $name_first )
+		: __( 'Read the full story', 'pesa-donations' );
+	?>
+
 	<?php /* ---- Hero ---------------------------------------------------- */ ?>
 	<div class="pd-checkout__hero">
-		<p class="pd-checkout__thank-note"><?php echo esc_html( $hero_label ); ?></p>
 
 		<div class="pd-checkout__beneficiary">
-			<?php if ( $campaign->get_thumbnail_url() ) : ?>
-				<img src="<?php echo esc_url( $campaign->get_thumbnail_url( 'thumbnail' ) ); ?>"
-				     alt="<?php echo esc_attr( $hero_title ); ?>"
-				     class="pd-checkout__photo<?php echo $is_sponsorship ? '' : ' pd-checkout__photo--square'; ?>" />
+			<?php if ( $campaign->get_thumbnail_url( 'medium_large' ) ) : ?>
+				<div class="pd-checkout__photo-frame">
+					<img src="<?php echo esc_url( $campaign->get_thumbnail_url( 'medium_large' ) ); ?>"
+					     alt="<?php echo esc_attr( $hero_title ); ?>"
+					     class="pd-checkout__photo" />
+				</div>
 			<?php endif; ?>
 
 			<div class="pd-checkout__beneficiary-meta">
 				<h2 class="pd-checkout__beneficiary-name">
-					<?php echo esc_html( $hero_title ); ?>
+					<span class="pd-checkout__beneficiary-name--first"><?php echo esc_html( $name_first ); ?></span>
+					<?php if ( $name_rest ) : ?>
+						<span class="pd-checkout__beneficiary-name--rest"><?php echo esc_html( $name_rest ); ?></span>
+					<?php endif; ?>
 				</h2>
+
 				<?php if ( $campaign->get_beneficiary_location() ) : ?>
 					<p class="pd-checkout__location"><?php echo esc_html( $campaign->get_beneficiary_location() ); ?></p>
 				<?php endif; ?>
+
 				<?php if ( $campaign->get_content() ) : ?>
 					<a href="#pd-story-inline" class="pd-checkout__story-link" @click.prevent="toggleStory()">
-						<?php
-						echo esc_html(
-							$is_sponsorship && $campaign->get_beneficiary_name()
-								? $campaign->get_beneficiary_name() . '\'s story'
-								: __( 'Learn more', 'pesa-donations' )
-						);
-						?>
+						<span class="pd-checkout__story-icon" aria-hidden="true">
+							<svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
+								<path d="M3 2.5A1.5 1.5 0 0 1 4.5 1h11A1.5 1.5 0 0 1 17 2.5v14.75a.25.25 0 0 1-.4.2L10 12l-6.6 5.45a.25.25 0 0 1-.4-.2V2.5z"/>
+							</svg>
+						</span>
+						<span><?php echo esc_html( $story_label ); ?></span>
 					</a>
 				<?php endif; ?>
 			</div>
 		</div>
 
-		<?php /* inline story toggle */ ?>
-		<div class="pd-checkout__story-body" id="pd-story-inline" x-show="storyOpen" style="display:none;">
+		<?php /* inline story toggle — expands below the hero row when clicked */ ?>
+		<div class="pd-checkout__story-body" id="pd-story-inline" x-show="storyOpen" x-cloak style="display:none;">
 			<div class="pd-brand-bar"></div>
 			<div class="pd-prose">
 				<?php echo wp_kses_post( $campaign->get_content() ); ?>
@@ -229,8 +245,12 @@ $config = wp_json_encode( [
 			<label class="pd-label"><?php esc_html_e( 'Email Address', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
 			<input type="email" x-model="formData.email" class="pd-input"
 			       :class="{ 'pd-input--error': errors.email }"
+			       @blur="lookupDonor()"
 			       autocomplete="email" />
 			<p class="pd-error-msg" x-show="errors.email" x-text="errors.email"></p>
+			<p class="pd-input-hint" x-show="donorRecognized" x-cloak style="display:none;">
+				&#128075; <?php esc_html_e( 'Welcome back! We\'ve pre-filled your details.', 'pesa-donations' ); ?>
+			</p>
 		</div>
 
 		<div class="pd-form-field">
@@ -242,7 +262,8 @@ $config = wp_json_encode( [
 
 		<div class="pd-form-field">
 			<label class="pd-label"><?php esc_html_e( 'Phone Number', 'pesa-donations' ); ?></label>
-			<input type="tel" x-model="formData.phone" class="pd-input" autocomplete="tel" />
+			<input type="tel" x-model="formData.phone" class="pd-input"
+			       @blur="lookupDonor()" autocomplete="tel" />
 		</div>
 	</div>
 

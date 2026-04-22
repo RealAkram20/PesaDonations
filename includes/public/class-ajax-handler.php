@@ -16,6 +16,50 @@ class Ajax_Handler {
 
 		add_action( 'wp_ajax_pd_get_gateways',        [ $this, 'get_gateways' ] );
 		add_action( 'wp_ajax_nopriv_pd_get_gateways', [ $this, 'get_gateways' ] );
+
+		add_action( 'wp_ajax_pd_lookup_donor',        [ $this, 'lookup_donor' ] );
+		add_action( 'wp_ajax_nopriv_pd_lookup_donor', [ $this, 'lookup_donor' ] );
+	}
+
+	/**
+	 * Look up a returning donor by email or phone. Returns their stored
+	 * first/last name, phone, country so the checkout can auto-fill.
+	 */
+	public function lookup_donor(): void {
+		$this->verify_nonce();
+
+		$email = sanitize_email( wp_unslash( $_POST['email'] ?? '' ) );
+		$phone = Sanitizer::phone( $_POST['phone'] ?? '' );
+
+		if ( ! $email && ! $phone ) {
+			wp_send_json_success( null );
+		}
+
+		global $wpdb;
+		$table = $wpdb->prefix . 'pd_donors';
+		$donor = null;
+
+		if ( $email ) {
+			$donor = $wpdb->get_row(
+				$wpdb->prepare(
+					"SELECT first_name, last_name, email, phone, country FROM {$table} WHERE email = %s LIMIT 1",
+					strtolower( $email )
+				),
+				ARRAY_A
+			);
+		}
+
+		if ( ! $donor && $phone ) {
+			$donor = $wpdb->get_row(
+				$wpdb->prepare(
+					"SELECT first_name, last_name, email, phone, country FROM {$table} WHERE phone = %s LIMIT 1",
+					$phone
+				),
+				ARRAY_A
+			);
+		}
+
+		wp_send_json_success( $donor ?: null );
 	}
 
 	public function init_donation(): void {

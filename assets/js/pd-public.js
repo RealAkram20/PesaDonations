@@ -17,10 +17,6 @@ function pdCampaignList(campaignsJson) {
 		// Lightbox state
 		lightboxOpen:   false,
 		lightboxIndex:  0,
-		autoplayOn:     false,
-		autoplaySpeeds: [4000, 2500, 1500, 800],  // slow → turbo
-		autoplayIndex:  1,                          // start at "normal"
-		autoplayTimer:  null,
 
 		init() {
 			try {
@@ -56,19 +52,24 @@ function pdCampaignList(campaignsJson) {
 		},
 		closeLightbox() {
 			this.lightboxOpen = false;
-			this.stopAutoplay();
 		},
 		lightboxNext() {
-			if (!this.active) return;
-			const len = this.active.gallery.length;
-			this.lightboxIndex = (this.lightboxIndex + 1) % len;
-			if (this.autoplayOn) this.restartAutoplayTimer();
+			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
+			this.lightboxIndex = (this.lightboxIndex + 1) % this.active.gallery.length;
+			this.scrollActiveThumbIntoView();
 		},
 		lightboxPrev() {
-			if (!this.active) return;
-			const len = this.active.gallery.length;
-			this.lightboxIndex = (this.lightboxIndex - 1 + len) % len;
-			if (this.autoplayOn) this.restartAutoplayTimer();
+			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
+			this.lightboxIndex = (this.lightboxIndex - 1 + this.active.gallery.length) % this.active.gallery.length;
+			this.scrollActiveThumbIntoView();
+		},
+		scrollActiveThumbIntoView() {
+			this.$nextTick(() => {
+				const strip = this.$refs.strip;
+				if (!strip) return;
+				const active = strip.querySelector('.pd-lightbox__thumb--active');
+				if (active) active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+			});
 		},
 		get lightboxImage() {
 			if (!this.active || !this.active.gallery || !this.active.gallery[this.lightboxIndex]) return '';
@@ -76,43 +77,6 @@ function pdCampaignList(campaignsJson) {
 		},
 		get lightboxTotal() {
 			return (this.active && this.active.gallery) ? this.active.gallery.length : 0;
-		},
-
-		// --- Autoplay ---
-		get autoplaySpeed() {
-			return this.autoplaySpeeds[this.autoplayIndex];
-		},
-		get autoplaySpeedLabel() {
-			return ['SLOW', 'NORMAL', 'FAST', 'TURBO'][this.autoplayIndex];
-		},
-
-		toggleAutoplay() {
-			this.autoplayOn = !this.autoplayOn;
-			if (this.autoplayOn) this.startAutoplay();
-			else this.stopAutoplay();
-		},
-
-		cycleSpeed() {
-			this.autoplayIndex = (this.autoplayIndex + 1) % this.autoplaySpeeds.length;
-			if (this.autoplayOn) this.restartAutoplayTimer();
-		},
-
-		startAutoplay() {
-			this.stopAutoplay();
-			if (this.lightboxTotal < 2) return;
-			this.autoplayTimer = setInterval(() => this.lightboxNext(), this.autoplaySpeed);
-		},
-
-		stopAutoplay() {
-			if (this.autoplayTimer) {
-				clearInterval(this.autoplayTimer);
-				this.autoplayTimer = null;
-			}
-		},
-
-		restartAutoplayTimer() {
-			this.stopAutoplay();
-			this.autoplayTimer = setInterval(() => this.lightboxNext(), this.autoplaySpeed);
 		},
 	};
 }
@@ -139,19 +103,16 @@ function pdBrowse(campaignsJson, configJson) {
 		active:       null,
 		lightboxOpen:   false,
 		lightboxIndex:  0,
-		autoplayOn:     false,
-		autoplaySpeeds: [4000, 2500, 1500, 800],
-		autoplayIndex:  1,
-		autoplayTimer:  null,
 
 		/* ---- Browse config + state ----------------------------------- */
-		type:    cfg.type || 'project',
-		columns: cfg.columns || 3,
-		i18n:    cfg.i18n || {},
-		view:    'grid',
-		sort:    'default',
-		perPage: cfg.perPage || 12,
-		page:    1,
+		type:         cfg.type || 'project',
+		columns:      cfg.columns || 3,
+		i18n:         cfg.i18n || {},
+		view:         'grid',
+		sort:         'default',
+		perPage:      cfg.perPage || 12,
+		page:         1,
+		filtersOpen:  false,  // mobile drawer state
 		filters: {
 			search:    '',
 			ageRange:  [],
@@ -183,6 +144,31 @@ function pdBrowse(campaignsJson, configJson) {
 				|| this.filters.ageRange.length > 0
 				|| this.filters.status.length > 0
 				|| this.filters.goalRange.length > 0;
+		},
+
+		get activeFilterCount() {
+			let n = 0;
+			if (this.filters.search.trim() !== '') n++;
+			n += this.filters.ageRange.length;
+			n += this.filters.status.length;
+			n += this.filters.goalRange.length;
+			return n;
+		},
+
+		get sortLabel() {
+			const labels = {
+				'default':       'Default',
+				'recent':        'Recently Added',
+				'name_asc':      'Name: A → Z',
+				'name_desc':     'Name: Z → A',
+				'age_asc':       'Age: Young → Old',
+				'age_desc':      'Age: Old → Young',
+				'progress_desc': 'Progress: High → Low',
+				'progress_asc':  'Progress: Low → High',
+				'goal_desc':     'Goal: High → Low',
+				'goal_asc':      'Goal: Low → High',
+			};
+			return labels[this.sort] || 'Default';
 		},
 
 		get filtered() {
@@ -303,19 +289,24 @@ function pdBrowse(campaignsJson, configJson) {
 		},
 		closeLightbox() {
 			this.lightboxOpen = false;
-			this.stopAutoplay();
 		},
 		lightboxNext() {
-			if (!this.active) return;
-			const len = this.active.gallery.length;
-			this.lightboxIndex = (this.lightboxIndex + 1) % len;
-			if (this.autoplayOn) this.restartAutoplayTimer();
+			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
+			this.lightboxIndex = (this.lightboxIndex + 1) % this.active.gallery.length;
+			this.scrollActiveThumbIntoView();
 		},
 		lightboxPrev() {
-			if (!this.active) return;
-			const len = this.active.gallery.length;
-			this.lightboxIndex = (this.lightboxIndex - 1 + len) % len;
-			if (this.autoplayOn) this.restartAutoplayTimer();
+			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
+			this.lightboxIndex = (this.lightboxIndex - 1 + this.active.gallery.length) % this.active.gallery.length;
+			this.scrollActiveThumbIntoView();
+		},
+		scrollActiveThumbIntoView() {
+			this.$nextTick(() => {
+				const strip = this.$refs.strip;
+				if (!strip) return;
+				const active = strip.querySelector('.pd-lightbox__thumb--active');
+				if (active) active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+			});
 		},
 		get lightboxImage() {
 			if (!this.active || !this.active.gallery || !this.active.gallery[this.lightboxIndex]) return '';
@@ -324,29 +315,151 @@ function pdBrowse(campaignsJson, configJson) {
 		get lightboxTotal() {
 			return (this.active && this.active.gallery) ? this.active.gallery.length : 0;
 		},
-		get autoplaySpeed()      { return this.autoplaySpeeds[this.autoplayIndex]; },
-		get autoplaySpeedLabel() { return ['SLOW', 'NORMAL', 'FAST', 'TURBO'][this.autoplayIndex]; },
-		toggleAutoplay() { this.autoplayOn = !this.autoplayOn; this.autoplayOn ? this.startAutoplay() : this.stopAutoplay(); },
-		cycleSpeed() {
-			this.autoplayIndex = (this.autoplayIndex + 1) % this.autoplaySpeeds.length;
-			if (this.autoplayOn) this.restartAutoplayTimer();
-		},
-		startAutoplay() {
-			this.stopAutoplay();
-			if (this.lightboxTotal < 2) return;
-			this.autoplayTimer = setInterval(() => this.lightboxNext(), this.autoplaySpeed);
-		},
-		stopAutoplay() {
-			if (this.autoplayTimer) { clearInterval(this.autoplayTimer); this.autoplayTimer = null; }
-		},
-		restartAutoplayTimer() {
-			this.stopAutoplay();
-			this.autoplayTimer = setInterval(() => this.lightboxNext(), this.autoplaySpeed);
-		},
 	};
 }
 
 window.pdBrowse = pdBrowse;
+
+/* =========================================================================
+   Slider — horizontal carousel with prev/next arrows, optional autoplay.
+   Uses native CSS scroll-snap for smooth scrolling and touch/swipe support.
+   Also includes the full details-modal + gallery-lightbox methods so the
+   "View Details" button on each card works inside the slider scope.
+   =========================================================================*/
+function pdSlider(configJson, campaignsJson) {
+	const cfg = typeof configJson === 'string' ? JSON.parse(configJson) : (configJson || {});
+
+	return {
+		/* ---- SLIDER state (cards carousel) ------------------------- */
+		sliderOn:         !!cfg.autoplay,       // renamed from `autoplay` — "is slider autoplaying?"
+		sliderInterval:   cfg.interval || 4500,
+		sliderTimer:      null,
+		sliderPaused:     false,
+
+		/* ---- Details modal state ---------------------------------- */
+		campaigns:    [],
+		modalOpen:    false,
+		active:       null,
+
+		/* ---- LIGHTBOX state (gallery viewer) ---------------------- */
+		lightboxOpen:     false,
+		lightboxIndex:    0,
+
+		init() {
+			try {
+				this.campaigns = typeof campaignsJson === 'string'
+					? JSON.parse(campaignsJson)
+					: (campaignsJson || []);
+			} catch (e) { this.campaigns = []; }
+			if (this.sliderOn) this.startSlider();
+		},
+
+		/* ---- Slider navigation ------------------------------------- */
+		slideDistance() {
+			const track = this.$refs.track;
+			if (!track) return 0;
+			const slide = track.querySelector('.pd-slider__slide');
+			if (!slide) return track.clientWidth;
+			const style = getComputedStyle(track);
+			const gap   = parseInt(style.gap || style.columnGap || '20', 10) || 0;
+			return slide.offsetWidth + gap;
+		},
+
+		prev() {
+			const track = this.$refs.track;
+			if (!track) return;
+			if (track.scrollLeft < 10) {
+				track.scrollTo({ left: track.scrollWidth, behavior: 'smooth' });
+			} else {
+				track.scrollBy({ left: -this.slideDistance(), behavior: 'smooth' });
+			}
+			this.resetSlider();
+		},
+
+		next() {
+			const track = this.$refs.track;
+			if (!track) return;
+			const maxScroll = track.scrollWidth - track.clientWidth;
+			if (track.scrollLeft >= maxScroll - 10) {
+				track.scrollTo({ left: 0, behavior: 'smooth' });
+			} else {
+				track.scrollBy({ left: this.slideDistance(), behavior: 'smooth' });
+			}
+			this.resetSlider();
+		},
+
+		startSlider() {
+			if (!this.sliderOn) return;
+			this.stopSlider();
+			this.sliderTimer = setInterval(() => {
+				if (!this.sliderPaused) this.next();
+			}, this.sliderInterval);
+		},
+
+		stopSlider() {
+			if (this.sliderTimer) {
+				clearInterval(this.sliderTimer);
+				this.sliderTimer = null;
+			}
+		},
+
+		pauseAutoplay()  { this.sliderPaused = true; },   // keeps name for slider wrapper @mouseenter
+		resumeAutoplay() { this.sliderPaused = false; },  // keeps name for slider wrapper @mouseleave
+		resetSlider()    { if (this.sliderOn) this.startSlider(); },
+
+		/* ---- Details modal ----------------------------------------- */
+		openDetails(data) {
+			try { this.active = typeof data === 'string' ? JSON.parse(data) : data; }
+			catch (e) { this.active = data; }
+			this.modalOpen = true;
+			document.body.style.overflow = 'hidden';
+			this.pauseAutoplay();
+		},
+		closeModal() {
+			this.modalOpen = false;
+			this.active    = null;
+			document.body.style.overflow = '';
+			this.resumeAutoplay();
+		},
+
+		/* ---- Gallery lightbox -------------------------------------- */
+		openLightbox(index) {
+			if (!this.active || !this.active.gallery) return;
+			this.lightboxIndex = index;
+			this.lightboxOpen  = true;
+		},
+		closeLightbox() {
+			this.lightboxOpen = false;
+		},
+		lightboxNext() {
+			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
+			this.lightboxIndex = (this.lightboxIndex + 1) % this.active.gallery.length;
+			this.scrollActiveThumbIntoView();
+		},
+		lightboxPrev() {
+			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
+			this.lightboxIndex = (this.lightboxIndex - 1 + this.active.gallery.length) % this.active.gallery.length;
+			this.scrollActiveThumbIntoView();
+		},
+		scrollActiveThumbIntoView() {
+			this.$nextTick(() => {
+				const strip = this.$refs.strip;
+				if (!strip) return;
+				const active = strip.querySelector('.pd-lightbox__thumb--active');
+				if (active) active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+			});
+		},
+		get lightboxImage() {
+			if (!this.active || !this.active.gallery || !this.active.gallery[this.lightboxIndex]) return '';
+			return this.active.gallery[this.lightboxIndex].full;
+		},
+		get lightboxTotal() {
+			return (this.active && this.active.gallery) ? this.active.gallery.length : 0;
+		},
+	};
+}
+
+window.pdSlider = pdSlider;
 
 /* =========================================================================
    Checkout Form
@@ -381,6 +494,8 @@ function pdCheckout(configJson) {
 		sliderMin:          0,
 		sliderMax:          0,
 		sliderStep:         1,
+		donorRecognized:    false,
+		donorLookupInFlight: false,
 
 		formData: {
 			amount:        '',
@@ -466,6 +581,41 @@ function pdCheckout(configJson) {
 
 		toggleStory() {
 			this.storyOpen = !this.storyOpen;
+		},
+
+		async lookupDonor() {
+			const email = (this.formData.email || '').trim();
+			const phone = (this.formData.phone || '').trim();
+			if ((!email || !email.includes('@')) && !phone) return;
+			if (this.donorLookupInFlight) return;
+			this.donorLookupInFlight = true;
+
+			try {
+				const body = new FormData();
+				body.append('action', 'pd_lookup_donor');
+				body.append('nonce', this.nonce);
+				if (email) body.append('email', email);
+				if (phone) body.append('phone', phone);
+
+				const res  = await fetch(this.ajaxUrl, { method: 'POST', body });
+				const data = await res.json();
+				if (data.success && data.data) {
+					const d = data.data;
+					// Only fill empty fields — don't overwrite what the user typed.
+					if (!this.formData.first_name && d.first_name) this.formData.first_name = d.first_name;
+					if (!this.formData.last_name  && d.last_name)  this.formData.last_name  = d.last_name;
+					if (!this.formData.phone      && d.phone)      this.formData.phone      = d.phone;
+					if (!this.formData.email      && d.email)      { this.formData.email = d.email; this.formData.confirm_email = d.email; }
+					if (!this.formData.confirm_email && this.formData.email) this.formData.confirm_email = this.formData.email;
+					if (!this.formData.country    && d.country)    this.formData.country    = d.country;
+					this.donorRecognized = true;
+					setTimeout(() => { this.donorRecognized = false; }, 5000);
+				}
+			} catch (e) {
+				/* silent — lookup is a nicety, not critical */
+			} finally {
+				this.donorLookupInFlight = false;
+			}
 		},
 
 		closeIframe() {

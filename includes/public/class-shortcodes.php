@@ -12,13 +12,10 @@ class Shortcodes {
 	public function register(): void {
 		$map = [
 			'pd_donate_button'  => 'render_donate_button',
-			'pd_sponsorships'   => 'render_sponsorships',
-			'pd_projects'       => 'render_projects',
 			'pd_sponsor_browse' => 'render_sponsor_browse',
 			'pd_give_browse'    => 'render_give_browse',
-			'pd_campaign'       => 'render_single_campaign',
-			'pd_campaign_list'  => 'render_campaign_list',
-			'pd_progress'       => 'render_progress',
+			'pd_sponsor_slider' => 'render_sponsor_slider',
+			'pd_give_slider'    => 'render_give_slider',
 			'pd_checkout'       => 'render_checkout',
 			'pd_thank_you'      => 'render_thank_you',
 		];
@@ -58,52 +55,8 @@ class Shortcodes {
 	}
 
 	// -------------------------------------------------------------------------
-	// [pd_sponsorships limit="12" columns="3" status="available"]
+	// Shared card renderer (used by sliders + browse details modal).
 	// -------------------------------------------------------------------------
-
-	public function render_sponsorships( array $atts ): string {
-		$atts = shortcode_atts( [
-			'limit'   => 12,
-			'columns' => 3,
-			'orderby' => 'date',
-			'status'  => 'active',
-		], $atts, 'pd_sponsorships' );
-
-		$campaigns = $this->query_campaigns( [
-			'posts_per_page' => (int) $atts['limit'],
-			'orderby'        => sanitize_key( $atts['orderby'] ),
-			'meta_query'     => [
-				[
-					'key'     => '_pd_category',
-					'value'   => [ 'sponsorship', 'child' ], // 'child' for legacy
-					'compare' => 'IN',
-				],
-			],
-		] );
-
-		if ( empty( $campaigns ) ) {
-			return '<p class="pd-empty">' . esc_html__( 'No sponsorship opportunities available at this time.', 'pesa-donations' ) . '</p>';
-		}
-
-		$json_data = wp_json_encode( array_map( fn( Campaign $c ) => $c->to_json_array(), $campaigns ) );
-
-		ob_start();
-		?>
-		<div class="pd-listing pd-listing--sponsorships"
-		     x-data="pdCampaignList(<?php echo esc_attr( $json_data ); ?>)"
-		     x-init="init()">
-
-			<div class="pd-grid pd-grid--<?php echo esc_attr( $atts['columns'] ); ?>col">
-				<?php foreach ( $campaigns as $campaign ) : ?>
-					<?php $this->render_sponsorship_card( $campaign ); ?>
-				<?php endforeach; ?>
-			</div>
-
-			<?php $this->render_details_modal(); ?>
-		</div>
-		<?php
-		return ob_get_clean();
-	}
 
 	private function render_sponsorship_card( Campaign $c ): void {
 		$data       = wp_json_encode( $c->to_json_array() );
@@ -265,91 +218,25 @@ class Shortcodes {
 			        @click.stop="lightboxNext()"
 			        aria-label="<?php esc_attr_e( 'Next', 'pesa-donations' ); ?>">&rsaquo;</button>
 
-			<div class="pd-lightbox__controls" @click.stop>
-				<button type="button" class="pd-lightbox__ctrl"
-				        :class="{ 'pd-lightbox__ctrl--on': autoplayOn }"
-				        @click.stop="toggleAutoplay()"
-				        :aria-label="autoplayOn ? '<?php echo esc_js( __( 'Pause slideshow', 'pesa-donations' ) ); ?>' : '<?php echo esc_js( __( 'Play slideshow', 'pesa-donations' ) ); ?>'">
-					<span x-show="!autoplayOn">&#9654;</span>
-					<span x-show="autoplayOn" class="pd-lightbox__pause">
-						<span></span><span></span>
-					</span>
-				</button>
+			<div class="pd-lightbox__strip" @click.stop x-ref="strip">
+				<template x-for="(thumb, i) in (active && active.gallery) || []" :key="thumb.id">
+					<button type="button"
+					        class="pd-lightbox__thumb"
+					        :class="{ 'pd-lightbox__thumb--active': i === lightboxIndex }"
+					        @click.stop="lightboxIndex = i"
+					        :aria-label="'<?php echo esc_js( __( 'View image', 'pesa-donations' ) ); ?> ' + (i + 1)">
+						<img :src="thumb.thumb" :alt="thumb.alt" loading="lazy" />
+					</button>
+				</template>
+			</div>
 
-				<button type="button" class="pd-lightbox__ctrl pd-lightbox__ctrl--speed"
-				        @click.stop="cycleSpeed()"
-				        :aria-label="'<?php echo esc_js( __( 'Change speed', 'pesa-donations' ) ); ?>: ' + autoplaySpeedLabel">
-					<span class="pd-lightbox__speed-label" x-text="autoplaySpeedLabel"></span>
-				</button>
-
-				<span class="pd-lightbox__counter">
-					<span x-text="lightboxIndex + 1"></span>
-					/
-					<span x-text="lightboxTotal"></span>
-				</span>
+			<div class="pd-lightbox__counter" @click.stop>
+				<span x-text="lightboxIndex + 1"></span>
+				<span class="pd-lightbox__counter-sep">/</span>
+				<span x-text="lightboxTotal"></span>
 			</div>
 		</div>
 		<?php
-	}
-
-	// -------------------------------------------------------------------------
-	// [pd_projects limit="6" columns="3"]
-	// -------------------------------------------------------------------------
-
-	public function render_projects( array $atts ): string {
-		$atts = shortcode_atts( [
-			'limit'    => 6,
-			'columns'  => 3,
-			'category' => '',
-			'orderby'  => 'date',
-		], $atts, 'pd_projects' );
-
-		$allowed_categories = [ 'project', 'school', 'hospital', 'medical', 'other' ];
-		$categories = $atts['category'] ? [ sanitize_key( $atts['category'] ) ] : $allowed_categories;
-
-		$campaigns = $this->query_campaigns( [
-			'posts_per_page' => (int) $atts['limit'],
-			'orderby'        => sanitize_key( $atts['orderby'] ),
-			'meta_query'     => [
-				[
-					'key'     => '_pd_category',
-					'value'   => $categories,
-					'compare' => 'IN',
-				],
-			],
-		] );
-
-		if ( empty( $campaigns ) ) {
-			// Try with just "project" (the new simplified category)
-			$campaigns = $this->query_campaigns( [
-				'posts_per_page' => (int) $atts['limit'],
-				'orderby'        => sanitize_key( $atts['orderby'] ),
-				'meta_query'     => [
-					[ 'key' => '_pd_category', 'value' => 'project' ],
-				],
-			] );
-		}
-
-		if ( empty( $campaigns ) ) {
-			return '<p class="pd-empty">' . esc_html__( 'No projects found.', 'pesa-donations' ) . '</p>';
-		}
-
-		$json_data = wp_json_encode( array_map( fn( Campaign $c ) => $c->to_json_array(), $campaigns ) );
-
-		ob_start();
-		?>
-		<div class="pd-listing pd-listing--projects"
-		     x-data="pdCampaignList(<?php echo esc_attr( $json_data ); ?>)"
-		     x-init="init()">
-			<div class="pd-grid pd-grid--<?php echo esc_attr( $atts['columns'] ); ?>col">
-				<?php foreach ( $campaigns as $campaign ) : ?>
-					<?php $this->render_project_card( $campaign ); ?>
-				<?php endforeach; ?>
-			</div>
-			<?php $this->render_details_modal(); ?>
-		</div>
-		<?php
-		return ob_get_clean();
 	}
 
 	private function render_project_card( Campaign $c ): void {
@@ -418,7 +305,10 @@ class Shortcodes {
 		$atts = shortcode_atts( [
 			'per_page' => 12,
 			'columns'  => 3,
+			'filters'  => 'true',
 		], $atts, $tag );
+
+		$show_filters = filter_var( $atts['filters'], FILTER_VALIDATE_BOOLEAN );
 
 		$meta_query = [];
 		if ( 'sponsorship' === $type ) {
@@ -499,11 +389,22 @@ class Shortcodes {
 
 		ob_start();
 		?>
-		<div class="pd-browse pd-browse--<?php echo esc_attr( $type ); ?>"
+		<div class="pd-browse pd-browse--<?php echo esc_attr( $type ); ?><?php echo $show_filters ? '' : ' pd-browse--no-filters'; ?>"
 		     x-data="pdBrowse(<?php echo esc_attr( $json_data ); ?>, <?php echo esc_attr( $config ); ?>)"
 		     x-init="init()">
 
-			<aside class="pd-browse__sidebar">
+			<?php if ( $show_filters ) : ?>
+			<div class="pd-browse__sidebar-overlay"
+			     x-show="filtersOpen" x-cloak
+			     @click="filtersOpen = false"
+			     style="display:none;"></div>
+
+			<aside class="pd-browse__sidebar"
+			       :class="{ 'pd-browse__sidebar--open': filtersOpen }">
+
+				<button type="button" class="pd-browse__sidebar-close"
+				        @click="filtersOpen = false"
+				        aria-label="<?php esc_attr_e( 'Close filters', 'pesa-donations' ); ?>">&times;</button>
 
 				<div class="pd-browse__search-wrap">
 					<input type="search"
@@ -566,29 +467,46 @@ class Shortcodes {
 
 				<button type="button" class="pd-btn pd-btn--ghost pd-btn--sm pd-browse__reset"
 				        @click="resetFilters()"
-				        x-show="hasActiveFilters">
+				        x-show="hasActiveFilters" x-cloak style="display:none;">
 					<?php esc_html_e( 'Reset Filters', 'pesa-donations' ); ?>
 				</button>
 
 			</aside>
+			<?php endif; ?>
 
 			<section class="pd-browse__main">
 
 				<div class="pd-browse__toolbar">
+					<?php if ( $show_filters ) : ?>
+					<button type="button" class="pd-browse__filter-btn"
+					        @click="filtersOpen = true"
+					        aria-label="<?php esc_attr_e( 'Open filters', 'pesa-donations' ); ?>">
+						<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+							<path fill="currentColor" d="M0 2h16L10 9v5L6 16V9z"/>
+						</svg>
+						<span><?php esc_html_e( 'Filters', 'pesa-donations' ); ?></span>
+						<span class="pd-browse__filter-count" x-show="hasActiveFilters" x-cloak style="display:none;" x-text="activeFilterCount"></span>
+					</button>
+					<?php endif; ?>
+
 					<div class="pd-browse__view-toggle" role="tablist" aria-label="<?php esc_attr_e( 'View', 'pesa-donations' ); ?>">
 						<button type="button"
 						        class="pd-view-btn"
 						        :class="{ 'pd-view-btn--active': isGridView }"
 						        @click="setView(true)"
 						        aria-label="<?php esc_attr_e( 'Grid view', 'pesa-donations' ); ?>">
-							<svg viewBox="0 0 16 16" width="16" height="16"><rect x="0" y="0" width="7" height="7"/><rect x="9" y="0" width="7" height="7"/><rect x="0" y="9" width="7" height="7"/><rect x="9" y="9" width="7" height="7"/></svg>
+							<span class="pd-icon pd-icon--grid" aria-hidden="true">
+								<span></span><span></span><span></span><span></span>
+							</span>
 						</button>
 						<button type="button"
 						        class="pd-view-btn"
 						        :class="{ 'pd-view-btn--active': isListView }"
 						        @click="setView(false)"
 						        aria-label="<?php esc_attr_e( 'List view', 'pesa-donations' ); ?>">
-							<svg viewBox="0 0 16 16" width="16" height="16"><rect x="0" y="1" width="16" height="4"/><rect x="0" y="11" width="16" height="4"/></svg>
+							<span class="pd-icon pd-icon--list" aria-hidden="true">
+								<span></span><span></span><span></span>
+							</span>
 						</button>
 					</div>
 
@@ -598,34 +516,51 @@ class Shortcodes {
 					</p>
 
 					<div class="pd-browse__toolbar-right">
-						<select class="pd-input pd-input--select pd-browse__sort" x-model="sort">
-							<option value="default"><?php esc_html_e( 'Default', 'pesa-donations' ); ?></option>
-							<option value="recent"><?php esc_html_e( 'Recently Added', 'pesa-donations' ); ?></option>
-							<option value="name_asc"><?php esc_html_e( 'Name: A → Z', 'pesa-donations' ); ?></option>
-							<option value="name_desc"><?php esc_html_e( 'Name: Z → A', 'pesa-donations' ); ?></option>
-							<?php if ( 'sponsorship' === $type ) : ?>
-								<option value="age_asc"><?php esc_html_e( 'Age: Young → Old', 'pesa-donations' ); ?></option>
-								<option value="age_desc"><?php esc_html_e( 'Age: Old → Young', 'pesa-donations' ); ?></option>
-							<?php endif; ?>
-							<option value="progress_desc"><?php esc_html_e( 'Progress: High → Low', 'pesa-donations' ); ?></option>
-							<option value="progress_asc"><?php esc_html_e( 'Progress: Low → High', 'pesa-donations' ); ?></option>
-							<option value="goal_desc"><?php esc_html_e( 'Goal: High → Low', 'pesa-donations' ); ?></option>
-							<option value="goal_asc"><?php esc_html_e( 'Goal: Low → High', 'pesa-donations' ); ?></option>
-						</select>
 
-						<select class="pd-input pd-input--select pd-browse__per-page" x-model.number="perPage">
-							<option value="12">12</option>
-							<option value="24">24</option>
-							<option value="48">48</option>
-						</select>
+						<div class="pd-select-wrap pd-select-wrap--sort">
+							<span class="pd-icon pd-icon--sort" aria-hidden="true">
+								<span></span><span></span><span></span>
+							</span>
+							<span class="pd-select-label" x-text="sortLabel"></span>
+							<span class="pd-select-chevron" aria-hidden="true"></span>
+							<select class="pd-select" x-model="sort"
+							        aria-label="<?php esc_attr_e( 'Sort', 'pesa-donations' ); ?>">
+								<option value="default"><?php esc_html_e( 'Default', 'pesa-donations' ); ?></option>
+								<option value="recent"><?php esc_html_e( 'Recently Added', 'pesa-donations' ); ?></option>
+								<option value="name_asc"><?php esc_html_e( 'Name: A → Z', 'pesa-donations' ); ?></option>
+								<option value="name_desc"><?php esc_html_e( 'Name: Z → A', 'pesa-donations' ); ?></option>
+								<?php if ( 'sponsorship' === $type ) : ?>
+									<option value="age_asc"><?php esc_html_e( 'Age: Young → Old', 'pesa-donations' ); ?></option>
+									<option value="age_desc"><?php esc_html_e( 'Age: Old → Young', 'pesa-donations' ); ?></option>
+								<?php endif; ?>
+								<option value="progress_desc"><?php esc_html_e( 'Progress: High → Low', 'pesa-donations' ); ?></option>
+								<option value="progress_asc"><?php esc_html_e( 'Progress: Low → High', 'pesa-donations' ); ?></option>
+								<option value="goal_desc"><?php esc_html_e( 'Goal: High → Low', 'pesa-donations' ); ?></option>
+								<option value="goal_asc"><?php esc_html_e( 'Goal: Low → High', 'pesa-donations' ); ?></option>
+							</select>
+						</div>
+
+						<div class="pd-select-wrap pd-select-wrap--perpage">
+							<span class="pd-icon pd-icon--stack" aria-hidden="true">
+								<span></span><span></span><span></span>
+							</span>
+							<span class="pd-select-label" x-text="perPage"></span>
+							<span class="pd-select-chevron" aria-hidden="true"></span>
+							<select class="pd-select" x-model.number="perPage"
+							        aria-label="<?php esc_attr_e( 'Items per page', 'pesa-donations' ); ?>">
+								<option value="12">12</option>
+								<option value="24">24</option>
+								<option value="48">48</option>
+							</select>
+						</div>
 					</div>
 				</div>
 
-				<p class="pd-empty" x-show="showEmpty" x-text="i18n.empty"></p>
+				<p class="pd-empty" x-show="showEmpty" x-cloak style="display:none;" x-text="i18n.empty"></p>
 
 				<div class="pd-grid"
 				     :class="'pd-grid--' + columns + 'col'"
-				     x-show="showGrid">
+				     x-show="showGrid" x-cloak>
 					<template x-for="c in paginated" :key="c.id">
 						<article :class="c.card_class">
 							<div class="pd-card__media">
@@ -675,7 +610,7 @@ class Shortcodes {
 				</div>
 
 				<div class="pd-list"
-				     x-show="showList">
+				     x-show="showList" x-cloak style="display:none;">
 					<template x-for="c in paginated" :key="c.id">
 						<article class="pd-list-row">
 							<div class="pd-list-row__media">
@@ -715,7 +650,7 @@ class Shortcodes {
 					</template>
 				</div>
 
-				<nav class="pd-browse__pagination" x-show="showPaginator" aria-label="<?php esc_attr_e( 'Pagination', 'pesa-donations' ); ?>">
+				<nav class="pd-browse__pagination" x-show="showPaginator" x-cloak style="display:none;" aria-label="<?php esc_attr_e( 'Pagination', 'pesa-donations' ); ?>">
 					<button type="button" class="pd-page-btn" :disabled="page === 1" @click="page = Math.max(1, page - 1)">&lsaquo;</button>
 					<template x-for="p in totalPages" :key="p">
 						<button type="button" class="pd-page-btn" :class="{ 'pd-page-btn--active': p === page }" @click="page = p" x-text="p"></button>
@@ -733,26 +668,79 @@ class Shortcodes {
 	}
 
 	// -------------------------------------------------------------------------
-	// [pd_progress id="123"]
+	// [pd_sponsor_slider] / [pd_give_slider] — horizontal carousels
 	// -------------------------------------------------------------------------
 
-	public function render_progress( array $atts ): string {
-		$atts     = shortcode_atts( [ 'id' => 0 ], $atts, 'pd_progress' );
-		$campaign = Campaign::get( (int) $atts['id'] );
-		if ( ! $campaign || $campaign->get_goal_amount() <= 0 ) {
+	public function render_sponsor_slider( array $atts ): string {
+		return $this->render_slider( 'sponsorship', $atts, 'pd_sponsor_slider' );
+	}
+
+	public function render_give_slider( array $atts ): string {
+		return $this->render_slider( 'project', $atts, 'pd_give_slider' );
+	}
+
+	private function render_slider( string $type, array $atts, string $tag ): string {
+		$atts = shortcode_atts( [
+			'limit'    => 10,
+			'per_view' => 3,
+			'autoplay' => 'false',
+			'interval' => 4500,
+		], $atts, $tag );
+
+		$meta_query = 'sponsorship' === $type
+			? [ [ 'key' => '_pd_category', 'value' => [ 'sponsorship', 'child' ], 'compare' => 'IN' ] ]
+			: [ [ 'key' => '_pd_category', 'value' => [ 'project', 'school', 'hospital', 'medical', 'other' ], 'compare' => 'IN' ] ];
+
+		$campaigns = $this->query_campaigns( [
+			'posts_per_page' => (int) $atts['limit'],
+			'orderby'        => 'date',
+			'meta_query'     => $meta_query,
+		] );
+
+		if ( empty( $campaigns ) ) {
 			return '';
 		}
-		$pct = $campaign->get_progress_percent();
+
+		$json_data = wp_json_encode( array_map( fn( Campaign $c ) => $c->to_json_array(), $campaigns ) );
+		$config    = wp_json_encode( [
+			'autoplay' => filter_var( $atts['autoplay'], FILTER_VALIDATE_BOOLEAN ),
+			'interval' => (int) $atts['interval'],
+		] );
+
+		$per_view = max( 1, min( 5, (int) $atts['per_view'] ) );
+
 		ob_start();
 		?>
-		<div class="pd-progress-widget">
-			<div class="pd-progress-bar" role="progressbar" aria-valuenow="<?php echo esc_attr( $pct ); ?>" aria-valuemin="0" aria-valuemax="100">
-				<div class="pd-progress-bar__fill" style="width:<?php echo esc_attr( $pct ); ?>%"></div>
+		<div class="pd-slider pd-slider--<?php echo esc_attr( $type ); ?>"
+		     style="--pd-slider-per-view: <?php echo esc_attr( (string) $per_view ); ?>;"
+		     x-data="pdSlider(<?php echo esc_attr( $config ); ?>, <?php echo esc_attr( $json_data ); ?>)"
+		     x-init="init()"
+		     @mouseenter="pauseAutoplay()"
+		     @mouseleave="resumeAutoplay()">
+
+			<button type="button" class="pd-slider__arrow pd-slider__arrow--prev"
+			        @click="prev()" aria-label="<?php esc_attr_e( 'Previous', 'pesa-donations' ); ?>">&lsaquo;</button>
+
+			<div class="pd-slider__viewport">
+				<div class="pd-slider__track" x-ref="track">
+					<?php foreach ( $campaigns as $campaign ) : ?>
+						<div class="pd-slider__slide">
+							<?php
+							if ( 'sponsorship' === $type ) {
+								$this->render_sponsorship_card( $campaign );
+							} else {
+								$this->render_project_card( $campaign );
+							}
+							?>
+						</div>
+					<?php endforeach; ?>
+				</div>
 			</div>
-			<div class="pd-progress-stats">
-				<span><?php echo esc_html( number_format( $campaign->get_raised_amount() ) . ' ' . $campaign->get_base_currency() ); ?> <?php esc_html_e( 'raised', 'pesa-donations' ); ?></span>
-				<span><?php echo esc_html( $pct . '%' ); ?></span>
-			</div>
+
+			<button type="button" class="pd-slider__arrow pd-slider__arrow--next"
+			        @click="next()" aria-label="<?php esc_attr_e( 'Next', 'pesa-donations' ); ?>">&rsaquo;</button>
+
+			<?php $this->render_details_modal(); ?>
 		</div>
 		<?php
 		return ob_get_clean();
@@ -777,60 +765,13 @@ class Shortcodes {
 	}
 
 	// -------------------------------------------------------------------------
-	// [pd_single_campaign id="123"] — full single display
-	// -------------------------------------------------------------------------
-
-	public function render_single_campaign( array $atts ): string {
-		$atts     = shortcode_atts( [ 'id' => 0, 'layout' => 'full' ], $atts, 'pd_campaign' );
-		$campaign = Campaign::get( (int) $atts['id'] );
-		if ( ! $campaign ) {
-			return '';
-		}
-		ob_start();
-		$this->load_template( 'campaign-single', [ 'campaign' => $campaign, 'layout' => $atts['layout'] ] );
-		return ob_get_clean();
-	}
-
-	// -------------------------------------------------------------------------
-	// [pd_campaign_list]
-	// -------------------------------------------------------------------------
-
-	public function render_campaign_list( array $atts ): string {
-		$atts = shortcode_atts( [
-			'category' => '',
-			'limit'    => 6,
-			'columns'  => 3,
-			'orderby'  => 'recent',
-			'status'   => 'active',
-		], $atts, 'pd_campaign_list' );
-
-		$meta_query = [];
-		if ( $atts['category'] ) {
-			$meta_query[] = [ 'key' => '_pd_category', 'value' => sanitize_key( $atts['category'] ) ];
-		}
-
-		$campaigns = $this->query_campaigns( [
-			'posts_per_page' => (int) $atts['limit'],
-			'orderby'        => sanitize_key( $atts['orderby'] ),
-			'meta_query'     => $meta_query,
-		] );
-
-		ob_start();
-		echo '<div class="pd-grid pd-grid--' . esc_attr( $atts['columns'] ) . 'col">';
-		foreach ( $campaigns as $c ) {
-			$this->render_project_card( $c );
-		}
-		echo '</div>';
-		return ob_get_clean();
-	}
-
-	// -------------------------------------------------------------------------
 	// [pd_thank_you]
 	// -------------------------------------------------------------------------
 
 	public function render_thank_you( array $atts ): string {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-		$uuid     = isset( $_GET['d'] ) ? sanitize_text_field( wp_unslash( $_GET['d'] ) ) : '';
+		$uuid_raw = $_GET['pd_d'] ?? ( $_GET['d'] ?? '' );
+		$uuid     = $uuid_raw ? sanitize_text_field( wp_unslash( $uuid_raw ) ) : '';
 		$donation = $uuid ? \PesaDonations\Models\Donation::get_by_uuid( $uuid ) : null;
 
 		// Navigation URLs
