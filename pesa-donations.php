@@ -3,7 +3,7 @@
  * Plugin Name:       PesaDonations
  * Plugin URI:        https://github.com/RealAkram20/PesaDonations
  * Description:       Modular donation plugin for East African NGOs. PesaPal + PayPal, one-time and recurring.
- * Version:           1.0.0
+ * Version:           1.1.0
  * Author:            ArmGenius (Rio Akram Miiro)
  * Author URI:        https://armgenius.com
  * Text Domain:       pesa-donations
@@ -20,7 +20,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'PD_VERSION',     '1.0.0' );
+define( 'PD_VERSION',     '1.1.0' );
 define( 'PD_PLUGIN_FILE', __FILE__ );
 define( 'PD_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'PD_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );

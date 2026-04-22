@@ -10,6 +10,7 @@ use PesaDonations\Payments\Gateway_Manager;
 use PesaDonations\Payments\Pesapal\Pesapal_Gateway;
 use PesaDonations\Payments\Pesapal\Pesapal_IPN;
 use PesaDonations\Modules\Email_Notifications\Email_Notifications;
+use PesaDonations\Modules\Updater\Updater;
 
 class Plugin {
 
@@ -47,6 +48,7 @@ class Plugin {
 
 	public function load_modules(): void {
 		( new Email_Notifications() )->register();
+		( new Updater() )->register();
 	}
 
 	public function load_cron(): void {
