@@ -22,8 +22,24 @@ class Donor {
 		);
 
 		if ( $row ) {
+			// Sticky-true opt-in: if the new submission opts the donor in
+			// to updates, persist it. Don't silently demote a previously
+			// subscribed donor when they leave the box unchecked on a
+			// later donation — opt-out must be explicit (admin or
+			// dedicated unsubscribe link).
+			if ( ! empty( $extra['wants_updates'] ) && empty( $row['wants_updates'] ) ) {
+				$wpdb->update(
+					$table,
+					[ 'wants_updates' => 1, 'updated_at' => current_time( 'mysql' ) ],
+					[ 'id' => (int) $row['id'] ]
+				);
+				$row['wants_updates'] = 1;
+			}
 			return new self( $row );
 		}
+
+		// New donor: store opt-in as supplied (default 0 if absent).
+		$extra['wants_updates'] = ! empty( $extra['wants_updates'] ) ? 1 : 0;
 
 		$now  = current_time( 'mysql' );
 		$data = array_merge( [

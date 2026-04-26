@@ -6,7 +6,7 @@ namespace PesaDonations\Core;
 class Installer {
 
 	private const DB_VERSION_OPTION = 'pd_db_version';
-	private const DB_VERSION        = '1.1.0';
+	private const DB_VERSION        = '1.2.0';
 
 	public static function install(): void {
 		self::create_tables();
@@ -42,6 +42,7 @@ class Installer {
 			first_name VARCHAR(100) NULL,
 			last_name VARCHAR(100) NULL,
 			country CHAR(2) NULL,
+			wants_updates TINYINT(1) NOT NULL DEFAULT 0,
 			total_donated_base DECIMAL(15,2) NOT NULL DEFAULT 0,
 			donation_count INT UNSIGNED NOT NULL DEFAULT 0,
 			first_donation_at DATETIME NULL,
@@ -50,7 +51,8 @@ class Installer {
 			updated_at DATETIME NOT NULL,
 			UNIQUE KEY uniq_email (email),
 			INDEX idx_user (user_id),
-			INDEX idx_phone (phone)
+			INDEX idx_phone (phone),
+			INDEX idx_wants_updates (wants_updates)
 		) {$charset};";
 
 		$sql[] = "CREATE TABLE {$wpdb->prefix}pd_donations (

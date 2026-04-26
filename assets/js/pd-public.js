@@ -695,6 +695,7 @@ function pdCheckout(configJson) {
 			body.append('phone',       this.formData.phone);
 			body.append('country',     this.formData.country);
 			body.append('message',     this.formData.notes);
+			body.append('updates',     this.formData.updates ? '1' : '0');
 
 			try {
 				console.log('[PesaDonations] sending AJAX', this.ajaxUrl);

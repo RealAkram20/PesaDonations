@@ -26,6 +26,7 @@ class Donors_List_Table extends \WP_List_Table {
 			'email'            => __( 'Email', 'pesa-donations' ),
 			'phone'            => __( 'Phone', 'pesa-donations' ),
 			'country'          => __( 'Country', 'pesa-donations' ),
+			'wants_updates'    => __( 'Subscribed', 'pesa-donations' ),
 			'donation_count'   => __( 'Donations', 'pesa-donations' ),
 			'total_donated'    => __( 'Total Given', 'pesa-donations' ),
 			'last_donation_at' => __( 'Last Donation', 'pesa-donations' ),
@@ -111,6 +112,12 @@ class Donors_List_Table extends \WP_List_Table {
 		return esc_html( $item['country'] ?: '—' );
 	}
 
+	protected function column_wants_updates( $item ): string {
+		return ! empty( $item['wants_updates'] )
+			? '<span style="color:#2e7d32;font-weight:600;" title="' . esc_attr__( 'Donor opted in to receive updates.', 'pesa-donations' ) . '">&#10003; ' . esc_html__( 'Yes', 'pesa-donations' ) . '</span>'
+			: '<span style="color:#999;">—</span>';
+	}
+
 	protected function column_donation_count( $item ): string {
 		return '<strong>' . (int) $item['donation_count'] . '</strong>';
 	}
@@ -151,6 +158,10 @@ class Donors_List_Table extends \WP_List_Table {
 		if ( ! empty( $_GET['pd_country'] ) ) {
 			$where[] = 'country = %s';
 			$args[]  = sanitize_text_field( wp_unslash( $_GET['pd_country'] ) );
+		}
+		if ( isset( $_GET['pd_subscribed'] ) && '' !== $_GET['pd_subscribed'] ) {
+			$where[] = 'wants_updates = %d';
+			$args[]  = (int) $_GET['pd_subscribed'] ? 1 : 0;
 		}
 
 		$where_sql = implode( ' AND ', $where );
@@ -199,7 +210,8 @@ class Donors_List_Table extends \WP_List_Table {
 			"SELECT DISTINCT country FROM {$wpdb->prefix}pd_donors WHERE country IS NOT NULL AND country != '' ORDER BY country"
 		);
 
-		$selected = isset( $_GET['pd_country'] ) ? sanitize_text_field( wp_unslash( $_GET['pd_country'] ) ) : '';
+		$selected     = isset( $_GET['pd_country'] ) ? sanitize_text_field( wp_unslash( $_GET['pd_country'] ) ) : '';
+		$sub_selected = isset( $_GET['pd_subscribed'] ) ? (string) $_GET['pd_subscribed'] : '';
 
 		echo '<div class="alignleft actions">';
 		echo '<select name="pd_country"><option value="">' . esc_html__( 'All countries', 'pesa-donations' ) . '</option>';
@@ -212,14 +224,37 @@ class Donors_List_Table extends \WP_List_Table {
 			);
 		}
 		echo '</select>';
+
+		echo '<select name="pd_subscribed" style="margin-left:6px;">'
+			. '<option value="">' . esc_html__( 'All subscribers', 'pesa-donations' ) . '</option>'
+			. '<option value="1"' . selected( $sub_selected, '1', false ) . '>' . esc_html__( 'Subscribed', 'pesa-donations' ) . '</option>'
+			. '<option value="0"' . selected( $sub_selected, '0', false ) . '>' . esc_html__( 'Not subscribed', 'pesa-donations' ) . '</option>'
+			. '</select>';
+
 		submit_button( __( 'Filter', 'pesa-donations' ), 'secondary', 'pd_filter', false );
-		if ( $selected ) {
+
+		if ( $selected || '' !== $sub_selected ) {
 			printf(
 				' <a href="%s" class="button-link" style="margin-left:6px;">%s</a>',
 				esc_url( admin_url( 'admin.php?page=pd-donors' ) ),
 				esc_html__( 'Reset', 'pesa-donations' )
 			);
 		}
+
+		// CSV export of opted-in subscribers.
+		$export_url = wp_nonce_url(
+			add_query_arg(
+				[ 'page' => 'pd-donors', 'pd_export' => 'subscribers' ],
+				admin_url( 'admin.php' )
+			),
+			'pd_export_subscribers'
+		);
+		printf(
+			' <a href="%s" class="button button-secondary" style="margin-left:12px;">%s</a>',
+			esc_url( $export_url ),
+			esc_html__( 'Export subscribers (CSV)', 'pesa-donations' )
+		);
+
 		echo '</div>';
 	}
 
@@ -228,6 +263,17 @@ class Donors_List_Table extends \WP_List_Table {
 	// -------------------------------------------------------------------------
 
 	public function process_bulk_action(): void {
+		// CSV export of all subscribed donors.
+		if (
+			isset( $_GET['pd_export'], $_GET['_wpnonce'] ) &&
+			'subscribers' === $_GET['pd_export'] &&
+			current_user_can( 'manage_options' ) &&
+			wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'pd_export_subscribers' )
+		) {
+			$this->export_subscribers_csv();
+			exit;
+		}
+
 		// Single-item delete via row action link.
 		if (
 			isset( $_GET['action'], $_GET['id'], $_GET['_wpnonce'] ) &&
@@ -275,5 +321,49 @@ class Donors_List_Table extends \WP_List_Table {
 
 	public function no_items(): void {
 		esc_html_e( 'No donors found.', 'pesa-donations' );
+	}
+
+	/**
+	 * Streams a CSV of every donor with `wants_updates = 1`. Caller must
+	 * have already verified the nonce and capability.
+	 */
+	private function export_subscribers_csv(): void {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			"SELECT first_name, last_name, email, phone, country, donation_count, total_donated_base, last_donation_at, created_at
+			 FROM {$wpdb->prefix}pd_donors
+			 WHERE wants_updates = 1
+			 ORDER BY last_donation_at DESC, id DESC",
+			ARRAY_A
+		);
+
+		nocache_headers();
+		header( 'Content-Type: text/csv; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="pesa-donations-subscribers-' . gmdate( 'Y-m-d' ) . '.csv"' );
+
+		$out = fopen( 'php://output', 'w' );
+		// UTF-8 BOM so Excel opens the file correctly.
+		fwrite( $out, "\xEF\xBB\xBF" );
+		fputcsv( $out, [
+			'First Name', 'Last Name', 'Email', 'Phone', 'Country',
+			'Donation Count', 'Total Donated', 'Last Donation', 'Subscribed Since',
+		] );
+
+		foreach ( $rows as $row ) {
+			fputcsv( $out, [
+				(string) $row['first_name'],
+				(string) $row['last_name'],
+				(string) $row['email'],
+				(string) $row['phone'],
+				(string) $row['country'],
+				(string) (int) $row['donation_count'],
+				(string) (float) $row['total_donated_base'],
+				(string) $row['last_donation_at'],
+				(string) $row['created_at'],
+			] );
+		}
+
+		fclose( $out );
 	}
 }

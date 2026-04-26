@@ -51,6 +51,7 @@ class Donor_Editor {
 			'first_name'         => '',
 			'last_name'          => '',
 			'country'            => '',
+			'wants_updates'      => 0,
 			'total_donated_base' => 0,
 			'donation_count'     => 0,
 			'first_donation_at'  => '',
@@ -137,6 +138,15 @@ class Donor_Editor {
 										<td>
 											<input type="text" name="country" id="pd_country" value="<?php echo esc_attr( $data['country'] ); ?>" maxlength="2" style="width:80px;" placeholder="UG" />
 											<span class="description"><?php esc_html_e( '2-letter code (e.g. UG, KE, US)', 'pesa-donations' ); ?></span>
+										</td>
+									</tr>
+									<tr>
+										<th><label for="pd_wants_updates"><?php esc_html_e( 'Email Updates', 'pesa-donations' ); ?></label></th>
+										<td>
+											<label>
+												<input type="checkbox" name="wants_updates" id="pd_wants_updates" value="1" <?php checked( ! empty( $data['wants_updates'] ) ); ?> />
+												<?php esc_html_e( 'Receive newsletter / updates from us', 'pesa-donations' ); ?>
+											</label>
 										</td>
 									</tr>
 								</tbody></table>
@@ -255,12 +265,15 @@ class Donor_Editor {
 		}
 
 		$data = [
-			'email'      => $email,
-			'first_name' => sanitize_text_field( wp_unslash( $_POST['first_name'] ?? '' ) ),
-			'last_name'  => sanitize_text_field( wp_unslash( $_POST['last_name'] ?? '' ) ),
-			'phone'      => sanitize_text_field( wp_unslash( $_POST['phone'] ?? '' ) ),
-			'country'    => strtoupper( sanitize_text_field( wp_unslash( $_POST['country'] ?? '' ) ) ),
-			'updated_at' => current_time( 'mysql' ),
+			'email'         => $email,
+			'first_name'    => sanitize_text_field( wp_unslash( $_POST['first_name'] ?? '' ) ),
+			'last_name'     => sanitize_text_field( wp_unslash( $_POST['last_name'] ?? '' ) ),
+			'phone'         => sanitize_text_field( wp_unslash( $_POST['phone'] ?? '' ) ),
+			'country'       => strtoupper( sanitize_text_field( wp_unslash( $_POST['country'] ?? '' ) ) ),
+			// Admin can toggle this freely (unlike the public form's
+			// sticky-true semantics) — admin is the explicit unsubscribe path.
+			'wants_updates' => ! empty( $_POST['wants_updates'] ) ? 1 : 0,
+			'updated_at'    => current_time( 'mysql' ),
 		];
 
 		global $wpdb;

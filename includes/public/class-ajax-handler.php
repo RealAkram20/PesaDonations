@@ -130,16 +130,18 @@ class Ajax_Handler {
 		$country    = sanitize_text_field( wp_unslash( $_POST['country'] ?? '' ) );
 		$message    = sanitize_textarea_field( wp_unslash( $_POST['message'] ?? '' ) );
 		$anonymous  = ! empty( $_POST['anonymous'] );
+		$updates    = ! empty( $_POST['updates'] ) ? 1 : 0;
 
 		if ( ! $email && ! $phone ) {
 			wp_send_json_error( [ 'message' => __( 'Email or phone number is required.', 'pesa-donations' ) ], 422 );
 		}
 
 		$donor = Donor::get_or_create( $email ?: $phone . '@phone.pd', [
-			'first_name' => $first_name,
-			'last_name'  => $last_name,
-			'phone'      => $phone,
-			'country'    => $country,
+			'first_name'    => $first_name,
+			'last_name'     => $last_name,
+			'phone'         => $phone,
+			'country'       => $country,
+			'wants_updates' => $updates,
 		] );
 
 		// Donor::get_or_create() returns id=0 on a hard insert failure
