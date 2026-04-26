@@ -6,7 +6,7 @@ namespace PesaDonations\Core;
 class Installer {
 
 	private const DB_VERSION_OPTION = 'pd_db_version';
-	private const DB_VERSION        = '1.0.0';
+	private const DB_VERSION        = '1.1.0';
 
 	public static function install(): void {
 		self::create_tables();
@@ -89,7 +89,8 @@ class Installer {
 			INDEX idx_status (status),
 			INDEX idx_merchant_ref (merchant_reference),
 			INDEX idx_tracking (order_tracking_id),
-			INDEX idx_created (created_at)
+			INDEX idx_created (created_at),
+			INDEX idx_campaign_status (campaign_id, status)
 		) {$charset};";
 
 		$sql[] = "CREATE TABLE {$wpdb->prefix}pd_recurring_schedules (
@@ -182,14 +183,16 @@ class Installer {
 	// -------------------------------------------------------------------------
 
 	private static function schedule_crons(): void {
-		if ( ! wp_next_scheduled( 'pd_daily_fx_rates' ) ) {
-			wp_schedule_event( time(), 'daily', 'pd_daily_fx_rates' );
-		}
 		if ( ! wp_next_scheduled( 'pd_purge_gateway_logs' ) ) {
 			wp_schedule_event( time(), 'daily', 'pd_purge_gateway_logs' );
 		}
 		if ( ! wp_next_scheduled( 'pd_daily_campaign_status' ) ) {
 			wp_schedule_event( time(), 'daily', 'pd_daily_campaign_status' );
+		}
+		// FX cron removed — endpoint sunset, multi-currency gated to
+		// campaign base currency until a working source is wired up.
+		if ( wp_next_scheduled( 'pd_daily_fx_rates' ) ) {
+			wp_clear_scheduled_hook( 'pd_daily_fx_rates' );
 		}
 	}
 

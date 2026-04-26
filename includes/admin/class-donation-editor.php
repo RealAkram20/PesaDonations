@@ -155,7 +155,6 @@ class Donation_Editor {
 											<select name="gateway" id="pd_gateway" class="regular-text">
 												<option value="manual"  <?php selected( $data['gateway'], 'manual' ); ?>><?php esc_html_e( 'Manual / Cash / Bank', 'pesa-donations' ); ?></option>
 												<option value="pesapal" <?php selected( $data['gateway'], 'pesapal' ); ?>>PesaPal</option>
-												<option value="paypal"  <?php selected( $data['gateway'], 'paypal' ); ?>>PayPal</option>
 											</select>
 										</td>
 									</tr>
@@ -288,9 +287,13 @@ class Donation_Editor {
 			$donor_id = $donor->get_id();
 		}
 
-		$status   = sanitize_key( wp_unslash( $_POST['status'] ?? 'pending' ) );
-		$created  = sanitize_text_field( wp_unslash( $_POST['created_at'] ?? '' ) );
-		$created  = $created ? str_replace( 'T', ' ', $created ) . ':00' : current_time( 'mysql' );
+		$status      = sanitize_key( wp_unslash( $_POST['status'] ?? 'pending' ) );
+		$created_raw = sanitize_text_field( wp_unslash( $_POST['created_at'] ?? '' ) );
+		// Reject anything strtotime() can't parse so a typo doesn't write
+		// "abc:00" into the row, which on non-strict MySQL would become
+		// 0000-00-00 and break list-table sort.
+		$ts          = $created_raw ? strtotime( str_replace( 'T', ' ', $created_raw ) ) : false;
+		$created     = $ts ? gmdate( 'Y-m-d H:i:s', $ts ) : current_time( 'mysql' );
 
 		$data = [
 			'campaign_id'       => $campaign_id,

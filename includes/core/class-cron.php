@@ -6,62 +6,26 @@ namespace PesaDonations\Core;
 use PesaDonations\Utils\Logger;
 
 /**
- * Handles the three recurring background jobs scheduled by Installer:
- *   - pd_daily_fx_rates       → fetch FX rates from exchangerate.host
+ * Handles the recurring background jobs scheduled by Installer:
  *   - pd_purge_gateway_logs   → trim wp_pd_gateway_logs older than retention
  *   - pd_daily_campaign_status → flip end-dated campaigns to "ended"
+ *
+ * The previous FX-rates cron used the now-sunset exchangerate.host endpoint
+ * and produced daily error logs without ever populating a usable transient.
+ * It has been removed; multi-currency donations are gated to the campaign's
+ * base currency until a working FX source is wired up.
  */
 class Cron {
 
 	public function register(): void {
-		add_action( 'pd_daily_fx_rates',        [ $this, 'refresh_fx_rates' ] );
 		add_action( 'pd_purge_gateway_logs',    [ $this, 'purge_logs' ] );
 		add_action( 'pd_daily_campaign_status', [ $this, 'update_campaign_status' ] );
-	}
 
-	// -------------------------------------------------------------------------
-	// FX Rates
-	// -------------------------------------------------------------------------
-
-	public function refresh_fx_rates(): void {
-		$base    = (string) get_option( 'pd_default_currency', 'UGX' );
-		$symbols = (array) get_option( 'pd_enabled_currencies', [ 'UGX', 'KES', 'TZS', 'USD' ] );
-		$symbols = array_values( array_unique( array_filter( array_map( 'strtoupper', $symbols ) ) ) );
-
-		if ( empty( $symbols ) ) {
-			return;
+		// One-time cleanup: clear the legacy FX cron so it stops firing on
+		// installs upgraded from earlier builds.
+		if ( wp_next_scheduled( 'pd_daily_fx_rates' ) ) {
+			wp_clear_scheduled_hook( 'pd_daily_fx_rates' );
 		}
-
-		$url = add_query_arg( [
-			'base'    => strtoupper( $base ),
-			'symbols' => implode( ',', $symbols ),
-		], 'https://api.exchangerate.host/latest' );
-
-		$response = wp_remote_get( $url, [ 'timeout' => 15 ] );
-		if ( is_wp_error( $response ) ) {
-			Logger::error( 'FX rates fetch failed: ' . $response->get_error_message() );
-			return;
-		}
-
-		$status = (int) wp_remote_retrieve_response_code( $response );
-		if ( 200 !== $status ) {
-			Logger::error( 'FX rates HTTP ' . $status );
-			return;
-		}
-
-		$body = json_decode( wp_remote_retrieve_body( $response ), true );
-		if ( ! is_array( $body ) || empty( $body['rates'] ) ) {
-			Logger::error( 'FX rates returned invalid payload' );
-			return;
-		}
-
-		set_transient( 'pd_fx_rates', [
-			'base'      => strtoupper( $base ),
-			'rates'     => $body['rates'],
-			'fetched'   => time(),
-		], DAY_IN_SECONDS );
-
-		Logger::info( 'FX rates refreshed', [ 'base' => $base, 'count' => count( $body['rates'] ) ] );
 	}
 
 	// -------------------------------------------------------------------------
@@ -93,6 +57,11 @@ class Cron {
 
 		$today = gmdate( 'Y-m-d' );
 
+		// Batch size cap — process at most this many campaigns per cron tick.
+		// Re-queue if the result set hits the cap so the next run finishes the
+		// rest. This prevents runaway loops when there are many candidates.
+		$batch = (int) apply_filters( 'pd_cron_campaign_status_batch', 200 );
+
 		// Find active campaigns whose end_date has passed.
 		$candidates = $wpdb->get_col( $wpdb->prepare(
 			"SELECT pm.post_id
@@ -101,8 +70,10 @@ class Cron {
 			 WHERE pm.meta_key = '_pd_end_date'
 			   AND pm.meta_value != ''
 			   AND pm.meta_value < %s
-			   AND status.meta_value = 'active'",
-			$today
+			   AND status.meta_value = 'active'
+			 LIMIT %d",
+			$today,
+			$batch
 		) );
 
 		foreach ( $candidates as $post_id ) {
@@ -113,22 +84,38 @@ class Cron {
 			Logger::info( 'Campaigns auto-ended', [ 'count' => count( $candidates ), 'ids' => $candidates ] );
 		}
 
-		// Also: flip campaigns that hit 100% to "reached" (visual only — donations still allowed).
-		$active_with_goal = $wpdb->get_results(
-			"SELECT goal.post_id, goal.meta_value AS goal_amount,
+		// Reconcile active vs reached campaigns. Two-way: campaigns with a
+		// goal that's been hit flip to 'reached'; campaigns previously
+		// flipped to 'reached' that no longer meet the goal (raised goal,
+		// chargeback, etc.) flip back to 'active'.
+		$with_goal = $wpdb->get_results( $wpdb->prepare(
+			"SELECT goal.post_id, goal.meta_value AS goal_amount, status.meta_value AS status,
 				(SELECT COALESCE(SUM(amount_base),0) FROM {$wpdb->prefix}pd_donations
 				 WHERE campaign_id = goal.post_id AND status = 'completed') AS raised
 			 FROM {$wpdb->postmeta} goal
 			 INNER JOIN {$wpdb->postmeta} status ON status.post_id = goal.post_id AND status.meta_key = '_pd_status'
 			 WHERE goal.meta_key = '_pd_goal_amount'
 			   AND CAST(goal.meta_value AS DECIMAL(15,2)) > 0
-			   AND status.meta_value = 'active'",
-			ARRAY_A
-		);
+			   AND status.meta_value IN ('active', 'reached')
+			 LIMIT %d",
+			$batch
+		), ARRAY_A );
 
-		foreach ( $active_with_goal as $row ) {
-			if ( (float) $row['raised'] >= (float) $row['goal_amount'] ) {
+		foreach ( $with_goal as $row ) {
+			$reached = (float) $row['raised'] >= (float) $row['goal_amount'];
+			$status  = (string) $row['status'];
+			if ( $reached && 'active' === $status ) {
 				update_post_meta( (int) $row['post_id'], '_pd_status', 'reached' );
+			} elseif ( ! $reached && 'reached' === $status ) {
+				update_post_meta( (int) $row['post_id'], '_pd_status', 'active' );
+			}
+		}
+
+		// If either query saturated the batch, schedule a follow-up run within
+		// the next minute so the rest of the work isn't deferred 24h.
+		if ( count( $candidates ) >= $batch || count( $with_goal ) >= $batch ) {
+			if ( ! wp_next_scheduled( 'pd_daily_campaign_status' ) ) {
+				wp_schedule_single_event( time() + MINUTE_IN_SECONDS, 'pd_daily_campaign_status' );
 			}
 		}
 	}

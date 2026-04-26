@@ -271,9 +271,13 @@ class Donor_Editor {
 			return $id;
 		}
 
-		// Check for duplicate email first.
+		// New-donor flow: a row with this email may already exist (form
+		// reused, or imported earlier). Treat it as an UPDATE on the
+		// existing donor instead of silently dropping the typed first/last
+		// name / phone / country, which is what previous versions did.
 		$existing = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE email = %s", $email ) );
 		if ( $existing ) {
+			$wpdb->update( $table, $data, [ 'id' => (int) $existing ] );
 			return (int) $existing;
 		}
 

@@ -70,8 +70,11 @@ class Admin_Menu {
 		);
 
 		// Hidden (not in menu) — for edit donation screen.
+		// Empty parent slug instead of null: passing null is deprecated in
+		// PHP 8.1+ (add_submenu_page expects string) and emits notices that
+		// can break header output on hosts with display_errors=on.
 		add_submenu_page(
-			null,
+			'',
 			__( 'Edit Donation', 'pesa-donations' ),
 			__( 'Edit Donation', 'pesa-donations' ),
 			'manage_options',
@@ -99,7 +102,7 @@ class Admin_Menu {
 
 		// Hidden — edit donor screen.
 		add_submenu_page(
-			null,
+			'',
 			__( 'Edit Donor', 'pesa-donations' ),
 			__( 'Edit Donor', 'pesa-donations' ),
 			'manage_options',

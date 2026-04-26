@@ -28,10 +28,16 @@ class Plugin {
 	public function run(): void {
 		add_action( 'plugins_loaded', [ $this, 'check_wp_version' ] );
 		add_action( 'plugins_loaded', [ $this, 'self_heal' ], 20 );
+		// Run schema migrations on admin loads so new tables/indexes added in
+		// later plugin versions get applied without a deactivate/reactivate.
+		add_action( 'admin_init', [ Installer::class, 'maybe_upgrade' ] );
 		add_action( 'init', [ $this, 'load_textdomain' ] );
 		add_action( 'init', [ $this, 'register_cpt' ] );
 
-		if ( is_admin() ) {
+		// is_admin() is true for admin-ajax.php too, which would pull the
+		// whole admin stack into every front-end donation submission. Only
+		// load admin code on real admin screens.
+		if ( is_admin() && ! wp_doing_ajax() ) {
 			add_action( 'plugins_loaded', [ $this, 'load_admin' ] );
 		}
 
@@ -49,6 +55,7 @@ class Plugin {
 	public function load_modules(): void {
 		( new Email_Notifications() )->register();
 		( new Updater() )->register();
+		( new Privacy() )->register();
 	}
 
 	public function load_cron(): void {
@@ -56,11 +63,24 @@ class Plugin {
 	}
 
 	/**
-	 * Runs on every load. If the checkout or thank-you pages are missing
-	 * (plugin upgraded from an earlier build, DB reset, page trashed, etc.),
-	 * re-create them. Flushes rewrite rules when any pages are added.
+	 * If the checkout or thank-you pages are missing (plugin upgraded from
+	 * an earlier build, DB reset, page trashed, etc.), re-create them.
+	 * Throttled to once per hour and gated to admin requests so an admin
+	 * trashing a page does not turn every front-end hit into a full
+	 * Installer::install() run (page inserts, dbDelta, cron schedule, etc.).
 	 */
 	public function self_heal(): void {
+		// Only run for admins on the admin side. Front-end requests must not
+		// re-run install() on every hit.
+		if ( ! is_admin() || wp_doing_ajax() ) {
+			return;
+		}
+
+		// Throttle: at most once per hour per site.
+		if ( get_transient( 'pd_self_heal_lock' ) ) {
+			return;
+		}
+
 		$checkout_id  = (int) get_option( 'pd_checkout_page_id' );
 		$thank_you_id = (int) get_option( 'pd_thank_you_page_id' );
 
@@ -70,6 +90,8 @@ class Plugin {
 		if ( ! $missing ) {
 			return;
 		}
+
+		set_transient( 'pd_self_heal_lock', 1, HOUR_IN_SECONDS );
 
 		Installer::install();
 

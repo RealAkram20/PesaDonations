@@ -8,17 +8,16 @@ class Settings {
 	private const OPTION_GROUP = 'pd_settings';
 
 	public function render(): void {
-		if ( isset( $_POST['pd_settings_nonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['pd_settings_nonce'] ) ), 'pd_save_settings' ) ) {
-			$this->save();
-			echo '<div class="notice notice-success"><p>' . esc_html__( 'Settings saved.', 'pesa-donations' ) . '</p></div>';
-		}
+		$nonce_ok = isset( $_POST['pd_settings_nonce'] ) && wp_verify_nonce(
+			sanitize_text_field( wp_unslash( $_POST['pd_settings_nonce'] ) ),
+			'pd_save_settings'
+		);
 
-		// Handle "Register IPN" button click.
-		if (
-			isset( $_POST['pd_register_ipn'] ) &&
-			isset( $_POST['pd_settings_nonce'] ) &&
-			wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['pd_settings_nonce'] ) ), 'pd_save_settings' )
-		) {
+		// Handle "Register IPN" button click FIRST and short-circuit. The form
+		// submits the same fields, so without this guard the save() block
+		// below would also fire and overwrite stored settings (e.g. blanking
+		// the password-input consumer secret) every time someone re-registers.
+		if ( $nonce_ok && isset( $_POST['pd_register_ipn'] ) ) {
 			delete_option( 'pd_pesapal_ipn_id' );
 			delete_option( 'pd_pesapal_ipn_env' );
 			$ipn_id = ( new \PesaDonations\Payments\Pesapal\Pesapal_Gateway() )->ensure_ipn_registered();
@@ -27,6 +26,9 @@ class Settings {
 			} else {
 				echo '<div class="notice notice-error"><p>' . esc_html__( 'Failed to register IPN. Check that your keys are correct and see the logs.', 'pesa-donations' ) . '</p></div>';
 			}
+		} elseif ( $nonce_ok ) {
+			$this->save();
+			echo '<div class="notice notice-success"><p>' . esc_html__( 'Settings saved.', 'pesa-donations' ) . '</p></div>';
 		}
 
 		$tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'general';
@@ -80,12 +82,20 @@ class Settings {
 		echo '</tbody></table>';
 	}
 
+	/**
+	 * Renders a settings table row. Both args are pre-built HTML — callers
+	 * are expected to escape user-controlled content. The helpers below
+	 * (input/select) build their HTML through esc_attr/esc_html so values
+	 * from get_option() never reach this method un-escaped.
+	 */
 	private function row( string $label, string $field ): void {
 		echo "<tr><th>{$label}</th><td>{$field}</td></tr>"; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
 
 	private function input( string $name, string $label, string $type = 'text', string $description = '' ): void {
 		$value = esc_attr( (string) get_option( $name ) );
+		$name  = esc_attr( $name );
+		$type  = esc_attr( $type );
 		$field = "<input type='{$type}' name='{$name}' id='{$name}' value='{$value}' class='regular-text' />";
 		if ( $description ) {
 			$field .= "<p class='description'>" . esc_html( $description ) . '</p>';
@@ -95,6 +105,7 @@ class Settings {
 
 	private function select( string $name, string $label, array $options ): void {
 		$value = get_option( $name );
+		$name  = esc_attr( $name );
 		$field = "<select name='{$name}' id='{$name}'>";
 		foreach ( $options as $v => $l ) {
 			$field .= "<option value='" . esc_attr( $v ) . "'" . selected( $value, $v, false ) . '>' . esc_html( $l ) . '</option>';
@@ -138,6 +149,13 @@ class Settings {
 	}
 
 	private function render_paypal(): void {
+		echo '</tbody></table>'; // close the form-table opened in render_tab()
+		echo '<div class="notice notice-warning inline" style="margin:0 0 16px;"><p><strong>'
+			. esc_html__( 'PayPal integration is not yet implemented.', 'pesa-donations' ) . '</strong> '
+			. esc_html__( 'You can store your keys here for later use, but donors will only see PesaPal at checkout.', 'pesa-donations' )
+			. '</p></div>';
+		echo '<table class="form-table"><tbody>';
+
 		$this->select( 'pd_paypal_environment', __( 'Environment', 'pesa-donations' ), [
 			'sandbox'    => __( 'Sandbox (Testing)', 'pesa-donations' ),
 			'production' => __( 'Production (Live)', 'pesa-donations' ),
@@ -756,6 +774,14 @@ class Settings {
 	}
 
 	private function save(): void {
+		// Snapshot PesaPal credentials before write so we can detect a
+		// change and invalidate the IPN registration + cached auth token.
+		$pesapal_before = [
+			'env'    => (string) get_option( 'pd_pesapal_environment', '' ),
+			'key'    => (string) get_option( 'pd_pesapal_consumer_key', '' ),
+			'secret' => (string) get_option( 'pd_pesapal_consumer_secret', '' ),
+		];
+
 		$fields = [
 			'pd_default_currency', 'pd_pesapal_environment', 'pd_pesapal_consumer_key',
 			'pd_pesapal_consumer_secret', 'pd_paypal_environment', 'pd_paypal_client_id',
@@ -764,6 +790,9 @@ class Settings {
 			'pd_terms_url',
 		];
 		$url_fields = [ 'pd_terms_url' ];
+		// Fields where embedded CRLF would be a header-injection vector when
+		// later used in `wp_mail` From: headers.
+		$strip_crlf_fields = [ 'pd_email_from_name', 'pd_email_from_address', 'pd_admin_alert_email' ];
 
 		foreach ( $fields as $field ) {
 			if ( ! isset( $_POST[ $field ] ) ) {
@@ -773,8 +802,26 @@ class Settings {
 			if ( in_array( $field, $url_fields, true ) ) {
 				update_option( $field, esc_url_raw( $raw ) );
 			} else {
-				update_option( $field, sanitize_text_field( $raw ) );
+				$value = sanitize_text_field( $raw );
+				if ( in_array( $field, $strip_crlf_fields, true ) ) {
+					$value = str_replace( [ "\r", "\n" ], '', $value );
+				}
+				update_option( $field, $value );
 			}
+		}
+
+		// If any PesaPal credential or env changed, the cached IPN
+		// registration belongs to the old env/keys and the cached auth
+		// token is invalid. Clear both so the next request re-establishes.
+		$pesapal_after = [
+			'env'    => (string) get_option( 'pd_pesapal_environment', '' ),
+			'key'    => (string) get_option( 'pd_pesapal_consumer_key', '' ),
+			'secret' => (string) get_option( 'pd_pesapal_consumer_secret', '' ),
+		];
+		if ( $pesapal_before !== $pesapal_after ) {
+			delete_option( 'pd_pesapal_ipn_id' );
+			delete_option( 'pd_pesapal_ipn_env' );
+			\PesaDonations\Payments\Pesapal\Pesapal_Auth::clear_token();
 		}
 
 		// Multi-line footer field.

@@ -205,10 +205,21 @@ class Campaign {
 		}
 
 		global $wpdb;
-		$count = (int) $wpdb->get_var( $wpdb->prepare(
-			"SELECT COUNT(DISTINCT donor_email) FROM {$wpdb->prefix}pd_donations WHERE campaign_id = %d AND status = 'completed'",
+		// Count distinct donor_ids; treat NULL donor_id (legacy/anonymous
+		// rows with no donor record) as a single bucket. Counting by
+		// donor_email used to collapse all anonymous donations into one
+		// donor and split case-mismatched emails into multiple donors.
+		$donor_count = (int) $wpdb->get_var( $wpdb->prepare(
+			"SELECT COUNT(DISTINCT donor_id) FROM {$wpdb->prefix}pd_donations
+			 WHERE campaign_id = %d AND status = 'completed' AND donor_id IS NOT NULL",
 			$this->get_id()
 		) );
+		$has_anonymous = (int) $wpdb->get_var( $wpdb->prepare(
+			"SELECT EXISTS(SELECT 1 FROM {$wpdb->prefix}pd_donations
+			 WHERE campaign_id = %d AND status = 'completed' AND donor_id IS NULL)",
+			$this->get_id()
+		) );
+		$count = $donor_count + $has_anonymous;
 
 		set_transient( $transient, $count, 5 * MINUTE_IN_SECONDS );
 		return $count;

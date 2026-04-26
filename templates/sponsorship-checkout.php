@@ -442,12 +442,14 @@ $config = wp_json_encode( [
 
 <?php
 // Helper available globally after template is loaded.
-function pd_get_countries(): array {
-	return [
-		'UG' => 'Uganda',   'KE' => 'Kenya',    'TZ' => 'Tanzania',
-		'RW' => 'Rwanda',   'SS' => 'South Sudan','BI' => 'Burundi',
-		'US' => 'United States', 'GB' => 'United Kingdom', 'CA' => 'Canada',
-		'AU' => 'Australia', 'DE' => 'Germany',  'NL' => 'Netherlands',
-		'ZA' => 'South Africa', 'NG' => 'Nigeria', 'GH' => 'Ghana',
-	];
+if ( ! function_exists( 'pd_get_countries' ) ) {
+	function pd_get_countries(): array {
+		return [
+			'UG' => 'Uganda',   'KE' => 'Kenya',    'TZ' => 'Tanzania',
+			'RW' => 'Rwanda',   'SS' => 'South Sudan','BI' => 'Burundi',
+			'US' => 'United States', 'GB' => 'United Kingdom', 'CA' => 'Canada',
+			'AU' => 'Australia', 'DE' => 'Germany',  'NL' => 'Netherlands',
+			'ZA' => 'South Africa', 'NG' => 'Nigeria', 'GH' => 'Ghana',
+		];
+	}
 }

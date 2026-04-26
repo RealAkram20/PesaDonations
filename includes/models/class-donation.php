@@ -52,6 +52,15 @@ class Donation {
 			'updated_at'         => $now,
 		], $data );
 
+		// Schema requires merchant_reference NOT NULL with no default. On any
+		// MySQL with STRICT_TRANS_TABLES (default in 5.7+ / MariaDB 10.2+) the
+		// insert fails without it. Generate up-front; callers can override.
+		if ( empty( $insert['merchant_reference'] ) ) {
+			$campaign_id = (int) ( $insert['campaign_id'] ?? 0 );
+			$rand        = strtoupper( wp_generate_password( 12, false ) );
+			$insert['merchant_reference'] = "PD-{$campaign_id}-{$rand}";
+		}
+
 		$result = $wpdb->insert( $wpdb->prefix . 'pd_donations', $insert );
 		return $result ? $wpdb->insert_id : false;
 	}

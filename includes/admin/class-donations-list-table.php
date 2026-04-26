@@ -159,11 +159,14 @@ class Donations_List_Table extends \WP_List_Table {
 
 		global $wpdb;
 
-		// Campaign filter options.
+		// Campaign filter options. Capped at 500 to keep the page render
+		// snappy on sites with thousands of campaigns; the search box still
+		// finds the rest.
 		$campaigns = $wpdb->get_results(
 			"SELECT ID, post_title FROM {$wpdb->posts}
 			 WHERE post_type = 'pd_campaign' AND post_status = 'publish'
-			 ORDER BY post_title",
+			 ORDER BY post_title
+			 LIMIT 500",
 			ARRAY_A
 		);
 

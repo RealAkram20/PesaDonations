@@ -6,7 +6,11 @@ namespace PesaDonations\Utils;
 class Sanitizer {
 
 	public static function amount( mixed $value ): float {
-		return (float) preg_replace( '/[^0-9.]/', '', (string) $value );
+		$v = preg_replace( '/[^0-9.]/', '', (string) $value );
+		// Strip all but the first dot so "12.34.56" doesn't silently truncate
+		// to 12.34 — the float cast accepts it but the input is malformed.
+		$v = preg_replace( '/\.(?=.*\.)/', '', (string) $v );
+		return (float) $v;
 	}
 
 	public static function currency( mixed $value ): string {
@@ -14,7 +18,9 @@ class Sanitizer {
 	}
 
 	public static function gateway( mixed $value ): string {
-		$allowed = [ 'pesapal', 'paypal' ];
+		// PayPal is not yet implemented (see Settings → PayPal tab notice).
+		// Only PesaPal is exposed to public-facing code paths.
+		$allowed = apply_filters( 'pd_allowed_public_gateways', [ 'pesapal' ] );
 		$val     = strtolower( sanitize_key( (string) $value ) );
 		return in_array( $val, $allowed, true ) ? $val : '';
 	}

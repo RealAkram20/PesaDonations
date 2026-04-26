@@ -9,10 +9,16 @@ class Logger {
 	private string $log_dir;
 
 	private function __construct() {
-		$this->log_dir = WP_CONTENT_DIR . '/uploads/pesa-donations-logs/';
+		// Use wp_upload_dir() so multisite + custom UPLOADS constants are
+		// respected. WP_CONTENT_DIR . '/uploads/' is wrong on those setups.
+		$uploads = wp_upload_dir( null, false );
+		$base    = ! empty( $uploads['basedir'] ) ? $uploads['basedir'] : WP_CONTENT_DIR . '/uploads';
+		$this->log_dir = trailingslashit( $base ) . 'pesa-donations-logs/';
+
 		if ( ! is_dir( $this->log_dir ) ) {
 			wp_mkdir_p( $this->log_dir );
 			file_put_contents( $this->log_dir . '.htaccess', 'deny from all' );
+			file_put_contents( $this->log_dir . 'index.php', "<?php\n// Silence is golden.\n" );
 		}
 	}
 

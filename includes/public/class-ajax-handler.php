@@ -22,8 +22,13 @@ class Ajax_Handler {
 	}
 
 	/**
-	 * Look up a returning donor by email or phone. Returns their stored
-	 * first/last name, phone, country so the checkout can auto-fill.
+	 * Look up a returning donor by email or phone. By default this only
+	 * returns a boolean "yes/no, we know you" so the form can hint that
+	 * autofill is available — it does NOT echo the stored PII back, which
+	 * would let an unauthenticated attacker enumerate donors and harvest
+	 * names/phones. Sites that want autofill can opt in with the
+	 * `pd_lookup_donor_return_pii` filter (then make sure your checkout is
+	 * gated, e.g. behind a logged-in user). Per-IP rate-limited regardless.
 	 */
 	public function lookup_donor(): void {
 		$this->verify_nonce();
@@ -34,6 +39,14 @@ class Ajax_Handler {
 		if ( ! $email && ! $phone ) {
 			wp_send_json_success( null );
 		}
+
+		// Per-IP rate limit (20 lookups / 5 minutes). Stops bulk enumeration.
+		$ip_key = 'pd_lookup_rl_' . md5( (string) ( $_SERVER['REMOTE_ADDR'] ?? '0' ) );
+		$hits   = (int) get_transient( $ip_key );
+		if ( $hits > 20 ) {
+			wp_send_json_error( [ 'message' => __( 'Too many lookups. Please wait a few minutes.', 'pesa-donations' ) ], 429 );
+		}
+		set_transient( $ip_key, $hits + 1, 5 * MINUTE_IN_SECONDS );
 
 		global $wpdb;
 		$table = $wpdb->prefix . 'pd_donors';
@@ -59,7 +72,16 @@ class Ajax_Handler {
 			);
 		}
 
-		wp_send_json_success( $donor ?: null );
+		if ( ! $donor ) {
+			wp_send_json_success( null );
+		}
+
+		// Default: no PII echoed back. The client just learns "we know you".
+		if ( ! apply_filters( 'pd_lookup_donor_return_pii', false ) ) {
+			wp_send_json_success( [ 'known' => true ] );
+		}
+
+		wp_send_json_success( $donor );
 	}
 
 	public function init_donation(): void {
@@ -76,13 +98,27 @@ class Ajax_Handler {
 		$currency = Sanitizer::currency( $_POST['currency'] ?? '' ) ?: $campaign->get_base_currency();
 		$gateway  = Sanitizer::gateway( $_POST['gateway'] ?? 'pesapal' );
 		$min      = $campaign->get_minimum_amount();
+		$base     = $campaign->get_base_currency();
+
+		// FX conversion isn't implemented yet — accept only the campaign's
+		// base currency to avoid storing a bogus `amount_base` that would
+		// throw off dashboard totals and goal progress.
+		if ( $currency !== $base ) {
+			wp_send_json_error( [
+				'message' => sprintf(
+					/* translators: %s: base currency */
+					__( 'This campaign only accepts donations in %s.', 'pesa-donations' ),
+					$base
+				),
+			], 422 );
+		}
 
 		if ( $amount < $min ) {
 			wp_send_json_error( [
 				'message' => sprintf(
 					/* translators: %s: minimum amount with currency */
 					__( 'Minimum donation is %s.', 'pesa-donations' ),
-					number_format( $min ) . ' ' . $campaign->get_base_currency()
+					number_format( $min ) . ' ' . $base
 				),
 			], 422 );
 		}
@@ -106,10 +142,18 @@ class Ajax_Handler {
 			'country'    => $country,
 		] );
 
+		// Donor::get_or_create() returns id=0 on a hard insert failure
+		// (table missing, unique-key race that can't be recovered). Don't
+		// silently write an orphan donation pointing to a non-existent donor.
+		$donor_id = $donor->get_id();
+		if ( $donor_id <= 0 ) {
+			wp_send_json_error( [ 'message' => __( 'Could not create donor record.', 'pesa-donations' ) ], 500 );
+		}
+
 		// Create the donation row.
 		$donation_id = Donation::create( [
 			'campaign_id'  => $campaign_id,
-			'donor_id'     => $donor->get_id(),
+			'donor_id'     => $donor_id,
 			'amount'       => $amount,
 			'currency'     => $currency,
 			'amount_base'  => $amount,  // FX conversion applied in gateway init.
@@ -128,10 +172,6 @@ class Ajax_Handler {
 		}
 
 		$donation = Donation::get( $donation_id );
-
-		// Generate the merchant reference now that we have the ID.
-		$merchant_ref = Sanitizer::merchant_reference( (string) $campaign_id, (string) $donation_id );
-		$donation->update( [ 'merchant_reference' => $merchant_ref ] );
 
 		// Hand off to the gateway.
 		$gateway_obj = \PesaDonations\Payments\Gateway_Manager::get( $gateway );
@@ -183,12 +223,31 @@ class Ajax_Handler {
 		}
 	}
 
+	/**
+	 * Returns REMOTE_ADDR only — proxy headers like X-Forwarded-For are
+	 * client-controllable on direct hits and would let any donor spoof their
+	 * stored IP, defeating any rate-limit or fraud check that relies on it.
+	 * Sites behind a trusted reverse proxy (Cloudflare, nginx) can opt in
+	 * via the `pd_trust_proxy_headers` filter.
+	 */
 	private function get_ip(): string {
-		foreach ( [ 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR' ] as $key ) {
-			if ( ! empty( $_SERVER[ $key ] ) ) {
-				return sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) );
+		$remote = isset( $_SERVER['REMOTE_ADDR'] )
+			? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) )
+			: '';
+
+		if ( apply_filters( 'pd_trust_proxy_headers', false ) ) {
+			$xff = isset( $_SERVER['HTTP_X_FORWARDED_FOR'] )
+				? sanitize_text_field( wp_unslash( $_SERVER['HTTP_X_FORWARDED_FOR'] ) )
+				: '';
+			if ( $xff ) {
+				// Take the left-most entry: the original client per RFC 7239.
+				$first = trim( explode( ',', $xff )[0] );
+				if ( filter_var( $first, FILTER_VALIDATE_IP ) ) {
+					return $first;
+				}
 			}
 		}
-		return '';
+
+		return $remote;
 	}
 }

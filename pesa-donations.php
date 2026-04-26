@@ -56,4 +56,23 @@ Autoloader::register();
 register_activation_hook( __FILE__, [ Activator::class, 'activate' ] );
 register_deactivation_hook( __FILE__, [ Deactivator::class, 'deactivate' ] );
 
-Plugin::get_instance()->run();
+// Catch fatals during bootstrap (missing class file mid-update, FS case
+// mismatch, etc.) so a half-installed plugin can't take down the whole site.
+try {
+	Plugin::get_instance()->run();
+} catch ( \Throwable $e ) {
+	add_action( 'admin_notices', static function () use ( $e ): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+		printf(
+			'<div class="notice notice-error"><p><strong>%s</strong> %s</p></div>',
+			esc_html__( 'PesaDonations failed to load:', 'pesa-donations' ),
+			esc_html( $e->getMessage() )
+		);
+	} );
+	if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		error_log( 'PesaDonations bootstrap error: ' . $e->getMessage() );
+	}
+}

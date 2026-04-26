@@ -168,7 +168,7 @@ class Email_Notifications {
 		<a href="<?php echo esc_url( $site_url ); ?>" style="color:#fff;text-decoration:none;font-size:18px;font-weight:700;letter-spacing:.4px;"><?php echo esc_html( $site ); ?></a>
 	  </td></tr>
 	  <tr><td style="padding:28px;color:#333;font-size:15px;line-height:1.6;">
-		<?php echo $body; // already escaped by template ?>
+		<?php echo wp_kses_post( $body ); ?>
 	  </td></tr>
 	  <tr><td style="background:#fafafa;padding:18px 28px;color:#777;font-size:12px;text-align:center;border-top:1px solid #eee;">
 		<?php if ( $footer ) : ?>

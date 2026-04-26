@@ -13,10 +13,11 @@ class Donor {
 
 	public static function get_or_create( string $email, array $extra = [] ): self {
 		global $wpdb;
+		$table = $wpdb->prefix . 'pd_donors';
 
 		$email = strtolower( sanitize_email( $email ) );
 		$row   = $wpdb->get_row(
-			$wpdb->prepare( "SELECT * FROM {$wpdb->prefix}pd_donors WHERE email = %s", $email ),
+			$wpdb->prepare( "SELECT * FROM {$table} WHERE email = %s", $email ),
 			ARRAY_A
 		);
 
@@ -31,8 +32,26 @@ class Donor {
 			'updated_at' => $now,
 		], $extra );
 
-		$wpdb->insert( $wpdb->prefix . 'pd_donors', $data );
-		$data['id'] = $wpdb->insert_id;
+		// Race: two concurrent donations from the same returning donor email
+		// can both fall through the SELECT. UNIQUE KEY uniq_email then makes
+		// the second insert fail. Re-SELECT on failure rather than returning
+		// a Donor with id=0 (which would orphan the donation).
+		$inserted = $wpdb->insert( $table, $data );
+		if ( false === $inserted ) {
+			$existing = $wpdb->get_row(
+				$wpdb->prepare( "SELECT * FROM {$table} WHERE email = %s", $email ),
+				ARRAY_A
+			);
+			if ( $existing ) {
+				return new self( $existing );
+			}
+			// Genuine failure (table missing, etc.) — surface a row with id=0
+			// so the caller can detect it via get_id() === 0.
+			$data['id'] = 0;
+			return new self( $data );
+		}
+
+		$data['id'] = (int) $wpdb->insert_id;
 		return new self( $data );
 	}
 

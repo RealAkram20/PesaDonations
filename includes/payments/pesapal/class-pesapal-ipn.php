@@ -26,28 +26,43 @@ class Pesapal_IPN {
 
 	public function handle_ipn( WP_REST_Request $request ): WP_REST_Response {
 		$params = $request->get_params();
-		$tracking_id = sanitize_text_field( (string) ( $params['OrderTrackingId'] ?? '' ) );
-		$merchant_ref = sanitize_text_field( (string) ( $params['OrderMerchantReference'] ?? '' ) );
+		$tracking_id       = sanitize_text_field( (string) ( $params['OrderTrackingId'] ?? '' ) );
+		$merchant_ref      = sanitize_text_field( (string) ( $params['OrderMerchantReference'] ?? '' ) );
 		$notification_type = sanitize_text_field( (string) ( $params['OrderNotificationType'] ?? 'IPNCHANGE' ) );
 
-		global $wpdb;
-		$wpdb->insert( $wpdb->prefix . 'pd_gateway_logs', [
-			'gateway'      => 'pesapal',
-			'direction'    => 'incoming',
-			'endpoint'     => 'pesapal-ipn',
-			'request_body' => wp_json_encode( $params ),
-			'created_at'   => current_time( 'mysql' ),
-		] );
-
+		// Reject empty payloads up front — never log them. Anonymous attackers
+		// otherwise fill `pd_gateway_logs` to disk-full / max_allowed_packet.
 		if ( ! $tracking_id || ! $merchant_ref ) {
 			return new WP_REST_Response( [ 'status' => 400, 'error' => 'missing params' ], 400 );
 		}
 
+		// Per-IP rate limit (5 IPN hits / 60s). PesaPal retries on failure but
+		// not at this rate; this only stops abusive callers.
+		$bucket_key = 'pd_ipn_rl_' . md5( (string) ( $_SERVER['REMOTE_ADDR'] ?? '0' ) );
+		$bucket     = (int) get_transient( $bucket_key );
+		if ( $bucket > 5 ) {
+			return new WP_REST_Response( [ 'status' => 429 ], 429 );
+		}
+		set_transient( $bucket_key, $bucket + 1, MINUTE_IN_SECONDS );
+
+		// Resolve the donation BEFORE writing anything to the log table —
+		// unknown references are not logged.
 		$donation = Donation::get_by_merchant_ref( $merchant_ref );
 		if ( ! $donation ) {
 			Logger::error( 'PesaPal IPN: donation not found', [ 'ref' => $merchant_ref ] );
 			return new WP_REST_Response( [ 'status' => 404 ], 404 );
 		}
+
+		// Now log — this entry is tied to a real donation row.
+		global $wpdb;
+		$wpdb->insert( $wpdb->prefix . 'pd_gateway_logs', [
+			'gateway'             => 'pesapal',
+			'direction'           => 'incoming',
+			'endpoint'            => 'pesapal-ipn',
+			'request_body'        => wp_json_encode( $params ),
+			'related_donation_id' => $donation->get_id(),
+			'created_at'          => current_time( 'mysql' ),
+		] );
 
 		$this->sync_status( $donation, $tracking_id );
 
@@ -131,15 +146,48 @@ body { font-family: system-ui, sans-serif; display: flex; align-items: center; j
 		exit;
 	}
 
+	/**
+	 * Status precedence for the forward-only state machine. A donation can
+	 * only move to a status whose value is >= its current value, so PesaPal
+	 * IPN retries can't bounce a donation from completed → pending or
+	 * resurrect a failed transaction. `completed` and `reversed` are
+	 * terminal in normal flow; the only allowed transition out of
+	 * `completed` is `reversed` (chargeback).
+	 */
+	private const STATE_RANK = [
+		'pending'   => 0,
+		'failed'    => 1,
+		'cancelled' => 1,
+		'completed' => 2,
+		'reversed'  => 3,
+	];
+
 	private function sync_status( Donation $donation, string $tracking_id ): void {
 		// Refresh tracking id from response if not yet stored.
 		if ( $tracking_id && ! $donation->update( [ 'order_tracking_id' => $tracking_id ] ) ) {
 			// no-op
 		}
 
-		$result = Pesapal_Gateway::get_transaction_status( $tracking_id );
+		$result      = Pesapal_Gateway::get_transaction_status( $tracking_id );
+		$new_status  = (string) ( $result['status'] ?? 'pending' );
+		$prev_status = $donation->get_status();
+
+		// Forward-only guard. Reject any transition that would lower the
+		// donation's state rank — this is what makes IPN retries idempotent
+		// and prevents replay attacks from re-triggering completion emails.
+		$prev_rank = self::STATE_RANK[ $prev_status ] ?? 0;
+		$new_rank  = self::STATE_RANK[ $new_status ]  ?? 0;
+		$state_changed = $prev_status !== $new_status;
+
+		if ( $new_rank < $prev_rank ) {
+			// PesaPal returned an earlier state than we have. Ignore the
+			// status change but still update tracking metadata below.
+			$new_status    = $prev_status;
+			$state_changed = false;
+		}
+
 		$update = [
-			'status'      => $result['status'],
+			'status'      => $new_status,
 			'status_code' => $result['status_code'] ?? null,
 		];
 
@@ -149,7 +197,9 @@ body { font-family: system-ui, sans-serif; display: flex; align-items: center; j
 		if ( ! empty( $result['confirmation'] ) ) {
 			$update['confirmation_code'] = $result['confirmation'];
 		}
-		if ( 'completed' === $result['status'] ) {
+		// Stamp completed_at only on the actual transition, not on every IPN
+		// hit (otherwise duplicate IPNs keep moving the timestamp forward).
+		if ( 'completed' === $new_status && 'completed' !== $prev_status ) {
 			$update['completed_at'] = current_time( 'mysql' );
 		}
 		if ( ! empty( $result['raw'] ) ) {
@@ -159,25 +209,29 @@ body { font-family: system-ui, sans-serif; display: flex; align-items: center; j
 		$donation->update( $update );
 
 		// Refresh donor aggregates whenever the status changes.
-		global $wpdb;
-		$donor_id = (int) $wpdb->get_var( $wpdb->prepare(
-			"SELECT donor_id FROM {$wpdb->prefix}pd_donations WHERE id = %d",
-			$donation->get_id()
-		) );
-		if ( $donor_id ) {
-			\PesaDonations\Models\Donor::recalculate( $donor_id );
-		}
+		if ( $state_changed ) {
+			global $wpdb;
+			$donor_id = (int) $wpdb->get_var( $wpdb->prepare(
+				"SELECT donor_id FROM {$wpdb->prefix}pd_donations WHERE id = %d",
+				$donation->get_id()
+			) );
+			if ( $donor_id ) {
+				\PesaDonations\Models\Donor::recalculate( $donor_id );
+			}
 
-		// Bust campaign progress caches when a donation completes or reverses.
-		if ( in_array( $result['status'], [ 'completed', 'reversed' ], true ) ) {
-			delete_transient( 'pd_raised_' . $donation->get_campaign_id() );
-			delete_transient( 'pd_donors_' . $donation->get_campaign_id() );
-		}
+			// Bust campaign progress caches on completion / reversal.
+			if ( in_array( $new_status, [ 'completed', 'reversed' ], true ) ) {
+				delete_transient( 'pd_raised_' . $donation->get_campaign_id() );
+				delete_transient( 'pd_donors_' . $donation->get_campaign_id() );
+			}
 
-		if ( 'completed' === $result['status'] ) {
-			do_action( 'pd_donation_completed', $donation );
-		} elseif ( 'failed' === $result['status'] ) {
-			do_action( 'pd_donation_failed', $donation );
+			// Fire side-effect hooks (emails, etc.) only on the transition,
+			// never on duplicate IPNs.
+			if ( 'completed' === $new_status ) {
+				do_action( 'pd_donation_completed', $donation );
+			} elseif ( 'failed' === $new_status ) {
+				do_action( 'pd_donation_failed', $donation );
+			}
 		}
 	}
 }

@@ -7,24 +7,37 @@ use PesaDonations\Utils\Logger;
 
 class Pesapal_Auth {
 
-	private const TRANSIENT = 'pd_pesapal_token';
-	private const TTL       = 4 * MINUTE_IN_SECONDS;
+	private const TRANSIENT_PREFIX = 'pd_pesapal_token_';
+	private const TTL              = 4 * MINUTE_IN_SECONDS;
+
+	/**
+	 * Token cache key is scoped per environment so switching sandbox ↔
+	 * production in the admin doesn't reuse the wrong-env token (which
+	 * fails 401 against the new env's API).
+	 */
+	private static function transient_key(): string {
+		$env = (string) get_option( 'pd_pesapal_environment', 'sandbox' );
+		return self::TRANSIENT_PREFIX . sanitize_key( $env );
+	}
 
 	public static function get_token(): string {
-		$cached = get_transient( self::TRANSIENT );
+		$cached = get_transient( self::transient_key() );
 		if ( is_string( $cached ) && '' !== $cached ) {
 			return $cached;
 		}
 
 		$token = self::request_token();
 		if ( $token ) {
-			set_transient( self::TRANSIENT, $token, self::TTL );
+			set_transient( self::transient_key(), $token, self::TTL );
 		}
 		return $token;
 	}
 
 	public static function clear_token(): void {
-		delete_transient( self::TRANSIENT );
+		// Clear both env caches so a credential change is reflected
+		// regardless of which env is currently active.
+		delete_transient( self::TRANSIENT_PREFIX . 'sandbox' );
+		delete_transient( self::TRANSIENT_PREFIX . 'production' );
 	}
 
 	private static function request_token(): string {

@@ -24,7 +24,28 @@ class Updater {
 		add_action( 'init', [ $this, 'boot' ] );
 	}
 
+	/**
+	 * The GitHub auto-updater is OFF by default. Enable per-site by either:
+	 *   - defining `PD_ENABLE_GITHUB_UPDATER` truthy in wp-config.php, or
+	 *   - turning on the `pd_enable_github_updater` option in the admin.
+	 * This prevents an upstream commit from rolling out to every install
+	 * automatically and replacing plugin code mid-request.
+	 */
+	private function is_enabled(): bool {
+		if ( defined( 'PD_DISABLE_GITHUB_UPDATER' ) && PD_DISABLE_GITHUB_UPDATER ) {
+			return false;
+		}
+		if ( defined( 'PD_ENABLE_GITHUB_UPDATER' ) && PD_ENABLE_GITHUB_UPDATER ) {
+			return true;
+		}
+		return '1' === (string) get_option( 'pd_enable_github_updater', '0' );
+	}
+
 	public function boot(): void {
+		if ( ! $this->is_enabled() ) {
+			return;
+		}
+
 		$loader = PD_PLUGIN_DIR . 'includes/vendor/plugin-update-checker/plugin-update-checker.php';
 		if ( ! file_exists( $loader ) ) {
 			return;
