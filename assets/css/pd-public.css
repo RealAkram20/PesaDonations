@@ -1879,7 +1879,11 @@
    ========================================================================== */
 
 .pd-slider {
-	--pd-slider-per-view: 3 !important;
+	/* Per-breakpoint slide counts. The admin sets these inline via the
+	   shortcode (per_view / per_view_tablet / per_view_mobile). The CSS
+	   `--pd-slider-per-view` is computed below per @media block from
+	   whichever variable matches the current viewport. */
+	--pd-slider-per-view: var(--pd-slider-pv-desktop, 3) !important;
 	--pd-slider-gap: 20px !important;
 	position: relative !important;
 	font-family: var(--pd-body-font) !important;
@@ -1911,10 +1915,13 @@
 .pd-slider__slide > .pd-card { width: 100% !important; }
 
 @media (max-width: 960px) {
-	.pd-slider { --pd-slider-per-view: 2 !important; }
+	.pd-slider { --pd-slider-per-view: var(--pd-slider-pv-tablet, 2) !important; }
 }
 @media (max-width: 560px) {
-	.pd-slider { --pd-slider-per-view: 1 !important; --pd-slider-gap: 16px !important; }
+	.pd-slider {
+		--pd-slider-per-view: var(--pd-slider-pv-mobile, 1) !important;
+		--pd-slider-gap: 16px !important;
+	}
 }
 
 /* ---- Slider arrows ------------------------------------------------------ */
@@ -1965,4 +1972,767 @@
 	border-radius: 2px !important;
 	margin: 18px 0 !important;
 	opacity: .9 !important;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Sponsorship browse — compact cards (~70% of default sizing).            */
+/* Scoped to .pd-browse--sponsorship so the project (give) browse page     */
+/* and the home-page sliders are unaffected.                               */
+/* ----------------------------------------------------------------------- */
+
+/* Override the grid column count so more cards naturally fit per row,
+   shrinking each card. Applies regardless of the shortcode's `columns`
+   attr — the sponsorship browse always uses density-based packing. */
+.pd-browse--sponsorship .pd-grid,
+.pd-browse--sponsorship .pd-grid--1col,
+.pd-browse--sponsorship .pd-grid--2col,
+.pd-browse--sponsorship .pd-grid--3col,
+.pd-browse--sponsorship .pd-grid--4col {
+	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
+	gap: 14px !important;
+}
+
+/* Cap each card on narrow / single-column viewports so it doesn't span
+   the full screen width on mobile. Centered within its grid cell. */
+.pd-browse--sponsorship .pd-card {
+	max-width: 280px !important;
+	width: 100% !important;
+	margin: 0 auto !important;
+}
+
+/* Tighten the inner chrome so the smaller card still feels balanced.
+   Progress bar is intentionally NOT shrunk here — it stays the default
+   size so the % indicator remains legible inside the compact card. */
+.pd-browse--sponsorship .pd-card__body {
+	padding: 10px 12px 12px !important;
+	gap: 4px !important;
+}
+.pd-browse--sponsorship .pd-card__title {
+	font-size: 13px !important;
+	line-height: 1.22 !important;
+}
+.pd-browse--sponsorship .pd-card__meta {
+	font-size: 11.5px !important;
+}
+.pd-browse--sponsorship .pd-card__excerpt {
+	font-size: 12px !important;
+	line-height: 1.5 !important;
+}
+.pd-browse--sponsorship .pd-card__raised {
+	font-size: 11px !important;
+	margin-bottom: 0 !important;
+	gap: 5px !important;
+}
+.pd-browse--sponsorship .pd-card__raised-label {
+	font-size: 11px !important;
+}
+.pd-browse--sponsorship .pd-card .pd-raised {
+	font-size: 14.5px !important;
+}
+.pd-browse--sponsorship .pd-card__actions {
+	padding-top: 6px !important;
+	gap: 6px !important;
+}
+.pd-browse--sponsorship .pd-card__actions > .pd-btn {
+	padding: 7px 11px !important;
+	font-size: 10.5px !important;
+	letter-spacing: .5px !important;
+	min-height: 32px !important;
+}
+.pd-browse--sponsorship .pd-card__media .pd-tag {
+	font-size: 8px !important;
+	padding: 3px 7px !important;
+	letter-spacing: 1px !important;
+}
+
+/* ========================================================================
+   Donation card — used on the [pd_give_browse] page and [pd_give_slider]
+   for project-type campaigns. Completely separate from .pd-card so the
+   donation visual identity can't drift back into the sponsor card style.
+   Matches the design in the donation cards mockup: image with overlaid
+   "Raised Funds X%" badge, title, excerpt, two CTA buttons, and a
+   3-column footer (Raised Fund / Remaining / Expire Date).
+   ========================================================================*/
+
+.pd-donation-card {
+	background: var(--pd-surface) !important;
+	border: 1px solid #f4d9c8 !important;
+	border-radius: 14px !important;
+	overflow: hidden !important;
+	display: flex;
+	flex-direction: column !important;
+	box-shadow: 0 6px 24px rgba(196, 110, 70, .08) !important;
+	transition: transform var(--pd-transition), box-shadow var(--pd-transition) !important;
+	font-family: var(--pd-body-font) !important;
+}
+.pd-donation-card:hover {
+	transform: translateY(-3px) !important;
+	box-shadow: 0 12px 32px rgba(196, 110, 70, .14) !important;
+}
+
+.pd-donation-card__media {
+	position: relative !important;
+	aspect-ratio: 16 / 10 !important;
+	overflow: hidden !important;
+	background: var(--pd-surface-soft) !important;
+	margin: 14px 14px 0 !important;
+	border-radius: 10px !important;
+}
+.pd-donation-card__image {
+	width: 100% !important;
+	height: 100% !important;
+	object-fit: cover !important;
+	display: block;
+	transition: transform 0.6s var(--pd-ease) !important;
+}
+.pd-donation-card:hover .pd-donation-card__image { transform: scale(1.04) !important; }
+.pd-donation-card__image--placeholder {
+	background: linear-gradient(135deg, var(--pd-line) 0%, var(--pd-surface-soft) 100%) !important;
+}
+
+/* "Raised Funds 70%" pill overlaid on the image, bottom-left. */
+.pd-donation-card__badge {
+	position: absolute !important;
+	left: 0 !important;
+	bottom: 0 !important;
+	background: rgba(20, 20, 20, .68) !important;
+	backdrop-filter: blur(2px) !important;
+	-webkit-backdrop-filter: blur(2px) !important;
+	color: #fff !important;
+	font-size: 11px !important;
+	font-weight: 700 !important;
+	letter-spacing: .4px !important;
+	text-transform: uppercase !important;
+	padding: 6px 12px !important;
+	border-top-right-radius: 8px !important;
+	display: inline-flex;
+	align-items: center !important;
+	gap: 8px !important;
+}
+.pd-donation-card__badge-pct {
+	color: var(--pd-coral) !important;
+	font-weight: 800 !important;
+	font-size: 12px !important;
+}
+
+.pd-donation-card__body {
+	padding: 18px 20px 20px !important;
+	display: flex;
+	flex-direction: column !important;
+	gap: 12px !important;
+	flex: 1 !important;
+}
+
+.pd-donation-card__title {
+	font-family: var(--pd-display-font) !important;
+	font-weight: 700 !important;
+	font-size: 18px !important;
+	line-height: 1.3 !important;
+	color: #1f2a4a !important;
+	margin: 0 !important;
+	letter-spacing: -.2px !important;
+}
+
+.pd-donation-card__excerpt {
+	font-size: 13.5px !important;
+	color: #6b7488 !important;
+	line-height: 1.55 !important;
+	margin: 0 !important;
+}
+
+.pd-donation-card__actions {
+	display: flex;
+	gap: 10px !important;
+	flex-wrap: wrap !important;
+	margin-top: 4px !important;
+}
+.pd-donation-card__actions > .pd-btn {
+	flex: 1 1 auto !important;
+	padding: 10px 18px !important;
+	font-size: 11px !important;
+	letter-spacing: .8px !important;
+	min-height: 38px !important;
+}
+
+.pd-donation-card__stats {
+	display: grid !important;
+	grid-template-columns: repeat(3, 1fr) !important;
+	gap: 0 !important;
+	margin: 8px 0 0 !important;
+	padding-top: 14px !important;
+	border-top: 1px solid #f4e3d6 !important;
+}
+.pd-donation-card__stat {
+	padding: 0 8px !important;
+	text-align: center !important;
+	border-right: 1px solid #f4e3d6 !important;
+}
+.pd-donation-card__stat:first-child { padding-left: 0 !important; text-align: left !important; }
+.pd-donation-card__stat:last-child  { padding-right: 0 !important; border-right: 0 !important; text-align: right !important; }
+
+.pd-donation-card__stat dt {
+	font-size: 10px !important;
+	font-weight: 600 !important;
+	letter-spacing: 1px !important;
+	text-transform: uppercase !important;
+	color: #95a0b2 !important;
+	margin: 0 0 4px !important;
+}
+.pd-donation-card__stat dd {
+	font-family: var(--pd-display-font) !important;
+	font-size: 15px !important;
+	font-weight: 700 !important;
+	color: #1f2a4a !important;
+	margin: 0 !important;
+	line-height: 1.2 !important;
+}
+
+/* Slider context: full width inside its slide. */
+.pd-slider__slide > .pd-donation-card { width: 100% !important; }
+
+/* Tighter on mobile so the 3-stat row doesn't crowd. */
+@media (max-width: 480px) {
+	.pd-donation-card__stat dd { font-size: 13.5px !important; }
+	.pd-donation-card__stat dt { font-size: 9.5px !important; }
+	.pd-donation-card__actions > .pd-btn { padding: 9px 14px !important; }
+}
+
+/* ========================================================================
+   Single-donation page (templates/single-donation.php).
+   Two-column layout: main story column + right sidebar with three cards
+   (Donate CTA, More campaigns, Lead-capture form).
+   Includes a working gallery lightbox (uses .pd-lightbox classes shared
+   with the sponsor card modal) and a sticky mobile donate CTA.
+   ========================================================================*/
+
+.pd-donation-single {
+	font-family: var(--pd-body-font) !important;
+	color: var(--pd-ink) !important;
+	background:
+		radial-gradient(circle at 0% 0%, rgba(233,78,78,.06) 0%, transparent 40%),
+		radial-gradient(circle at 100% 100%, rgba(31,42,74,.04) 0%, transparent 50%),
+		#fdfaf6 !important;
+	padding: 36px 18px 48px !important;
+	min-height: 70vh !important;
+}
+.pd-donation-single * { box-sizing: border-box !important; }
+
+.pd-donation-single__container {
+	max-width: 1200px !important;
+	margin: 0 auto !important;
+	display: grid !important;
+	grid-template-columns: minmax(0, 1fr) 340px !important;
+	gap: 36px !important;
+	align-items: start !important;
+}
+@media (max-width: 1024px) {
+	.pd-donation-single__container { gap: 28px !important; }
+}
+@media (max-width: 900px) {
+	.pd-donation-single__container { grid-template-columns: 1fr !important; gap: 24px !important; }
+}
+
+.pd-donation-single__main { min-width: 0 !important; }
+
+/* Back link above the hero */
+.pd-donation-single__back {
+	display: inline-flex !important;
+	align-items: center !important;
+	gap: 6px !important;
+	font-size: 13px !important;
+	font-weight: 600 !important;
+	color: #6b7488 !important;
+	text-decoration: none !important;
+	margin-bottom: 14px !important;
+	transition: color .2s ease !important;
+}
+.pd-donation-single__back:hover { color: var(--pd-coral) !important; }
+
+.pd-donation-single__hero {
+	border-radius: 18px !important;
+	overflow: hidden !important;
+	margin-bottom: 24px !important;
+	aspect-ratio: 16 / 10 !important;
+	background: var(--pd-surface-soft) !important;
+	box-shadow: 0 12px 36px rgba(31, 42, 74, .08) !important;
+}
+.pd-donation-single__hero img {
+	width: 100% !important;
+	height: 100% !important;
+	object-fit: cover !important;
+	display: block !important;
+}
+@media (max-width: 600px) {
+	.pd-donation-single__hero { aspect-ratio: 4 / 3 !important; border-radius: 14px !important; margin-bottom: 18px !important; }
+}
+
+/* Type tag above title */
+.pd-donation-single__type-tag {
+	display: inline-block !important;
+	font-size: 11px !important;
+	font-weight: 700 !important;
+	color: var(--pd-coral) !important;
+	background: rgba(233,78,78,.1) !important;
+	letter-spacing: 1.5px !important;
+	text-transform: uppercase !important;
+	padding: 5px 12px !important;
+	border-radius: 100px !important;
+	margin-bottom: 14px !important;
+}
+
+.pd-donation-single__title {
+	font-family: var(--pd-display-font) !important;
+	font-size: 36px !important;
+	font-weight: 800 !important;
+	color: #1f2a4a !important;
+	line-height: 1.18 !important;
+	margin: 0 0 24px !important;
+	letter-spacing: -.5px !important;
+}
+@media (max-width: 720px) { .pd-donation-single__title { font-size: 28px !important; } }
+@media (max-width: 480px) { .pd-donation-single__title { font-size: 24px !important; } }
+
+/* ---- Progress block ----- */
+.pd-donation-single__progress {
+	display: flex;
+	align-items: center !important;
+	gap: 14px !important;
+	flex-wrap: wrap !important;
+	margin-bottom: 28px !important;
+}
+.pd-donation-single__progress-pill {
+	background: var(--pd-coral) !important;
+	color: #fff !important;
+	font-size: 11px !important;
+	font-weight: 700 !important;
+	letter-spacing: .8px !important;
+	text-transform: uppercase !important;
+	padding: 7px 14px !important;
+	border-radius: 6px !important;
+	display: inline-flex;
+	align-items: center !important;
+	gap: 8px !important;
+	flex-shrink: 0 !important;
+	box-shadow: 0 4px 12px rgba(233,78,78,.25) !important;
+}
+.pd-donation-single__progress-pill strong { font-size: 12px !important; font-weight: 800 !important; }
+
+.pd-donation-single__progress-bar {
+	flex: 1 1 200px !important;
+	height: 9px !important;
+	background: #f1e6dd !important;
+	border-radius: 100px !important;
+	overflow: hidden !important;
+	min-width: 140px !important;
+	position: relative !important;
+}
+.pd-donation-single__progress-fill {
+	height: 100% !important;
+	width: 0 !important;
+	background: linear-gradient(to right, var(--pd-coral), var(--pd-coral-dark)) !important;
+	border-radius: 100px !important;
+	animation: pd-donation-progress-fill 1.1s cubic-bezier(.2,.8,.2,1) forwards !important;
+}
+@keyframes pd-donation-progress-fill {
+	from { width: 0 !important; }
+	to   { width: var(--pd-progress, 0) !important; }
+}
+.pd-donation-single__progress-meta {
+	font-size: 13px !important;
+	color: #6b7488 !important;
+	margin: 0 !important;
+	display: inline-flex;
+	align-items: baseline !important;
+	gap: 8px !important;
+	flex-shrink: 0 !important;
+}
+.pd-donation-single__progress-pct { color: var(--pd-coral) !important; font-weight: 700 !important; }
+.pd-donation-single__progress-suffix { color: #6b7488 !important; font-weight: 500 !important; margin-left: 3px !important; }
+.pd-donation-single__progress-sep { color: #c5cfdc !important; }
+.pd-donation-single__progress-goal { font-weight: 600 !important; color: #1f2a4a !important; }
+.pd-donation-single__progress-goal-label { color: #95a0b2 !important; font-weight: 500 !important; margin-left: 3px !important; }
+
+@media (max-width: 480px) {
+	.pd-donation-single__progress { gap: 10px !important; }
+	.pd-donation-single__progress-bar { flex-basis: 100% !important; order: 3 !important; }
+	.pd-donation-single__progress-meta { order: 2 !important; }
+}
+
+/* ---- Body copy ----- */
+.pd-donation-single__content {
+	font-size: 15.5px !important;
+	line-height: 1.75 !important;
+	color: #4f5868 !important;
+	margin-bottom: 32px !important;
+}
+.pd-donation-single__content p { margin: 0 0 18px !important; }
+.pd-donation-single__content p:last-child { margin-bottom: 0 !important; }
+.pd-donation-single__content h2,
+.pd-donation-single__content h3 {
+	font-family: var(--pd-display-font) !important;
+	color: #1f2a4a !important;
+	margin: 28px 0 12px !important;
+}
+.pd-donation-single__content h2 { font-size: 22px !important; font-weight: 800 !important; }
+.pd-donation-single__content h3 { font-size: 18px !important; font-weight: 700 !important; }
+.pd-donation-single__content a { color: var(--pd-coral) !important; }
+.pd-donation-single__content a:hover { color: var(--pd-coral-dark) !important; }
+.pd-donation-single__content blockquote {
+	border-left: 3px solid var(--pd-coral) !important;
+	padding: 4px 0 4px 16px !important;
+	margin: 18px 0 !important;
+	color: #5b6376 !important;
+	font-style: italic !important;
+}
+
+/* ---- Inline gallery (clickable, opens lightbox) ----- */
+.pd-donation-single__gallery {
+	display: grid !important;
+	gap: 14px !important;
+	margin: 0 0 36px !important;
+}
+.pd-donation-single__gallery[data-count="1"] { grid-template-columns: 1fr !important; }
+.pd-donation-single__gallery[data-count="2"] { grid-template-columns: repeat(2, 1fr) !important; }
+.pd-donation-single__gallery[data-count="3"] { grid-template-columns: repeat(3, 1fr) !important; }
+.pd-donation-single__gallery[data-count="4"] { grid-template-columns: repeat(4, 1fr) !important; }
+@media (max-width: 720px) {
+	.pd-donation-single__gallery[data-count="3"],
+	.pd-donation-single__gallery[data-count="4"] { grid-template-columns: repeat(2, 1fr) !important; }
+}
+@media (max-width: 380px) {
+	.pd-donation-single__gallery[data-count="2"],
+	.pd-donation-single__gallery[data-count="3"],
+	.pd-donation-single__gallery[data-count="4"] { grid-template-columns: 1fr !important; }
+}
+
+.pd-donation-single__gallery-item {
+	position: relative !important;
+	display: block !important;
+	border: 0 !important;
+	padding: 0 !important;
+	background: var(--pd-surface-soft) !important;
+	border-radius: 14px !important;
+	overflow: hidden !important;
+	aspect-ratio: 4 / 3 !important;
+	cursor: zoom-in !important;
+	transition: transform .25s var(--pd-ease), box-shadow .25s var(--pd-ease) !important;
+}
+.pd-donation-single__gallery-item:hover {
+	transform: translateY(-2px) !important;
+	box-shadow: 0 12px 24px rgba(31, 42, 74, .14) !important;
+}
+.pd-donation-single__gallery-item img {
+	width: 100% !important;
+	height: 100% !important;
+	object-fit: cover !important;
+	display: block !important;
+	transition: transform .55s var(--pd-ease) !important;
+}
+.pd-donation-single__gallery-item:hover img { transform: scale(1.07) !important; }
+
+/* Hover zoom-icon overlay */
+.pd-donation-single__gallery-zoom {
+	position: absolute !important;
+	inset: 0 !important;
+	display: flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	color: #fff !important;
+	background: rgba(20, 20, 20, .35) !important;
+	opacity: 0 !important;
+	transition: opacity .2s ease !important;
+	pointer-events: none !important;
+}
+.pd-donation-single__gallery-zoom svg { width: 26px; height: 26px; }
+.pd-donation-single__gallery-item:hover .pd-donation-single__gallery-zoom,
+.pd-donation-single__gallery-item:focus-visible .pd-donation-single__gallery-zoom {
+	opacity: 1 !important;
+}
+
+/* "+N more" overlay on the last visible thumb when there are extras */
+.pd-donation-single__gallery-item--overflow .pd-donation-single__gallery-overflow {
+	position: absolute !important;
+	inset: 0 !important;
+	display: flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+	color: #fff !important;
+	font-family: var(--pd-display-font) !important;
+	font-size: 24px !important;
+	font-weight: 800 !important;
+	background: rgba(20, 20, 20, .55) !important;
+	letter-spacing: -.5px !important;
+	transition: background .2s ease !important;
+}
+.pd-donation-single__gallery-item--overflow:hover .pd-donation-single__gallery-overflow {
+	background: rgba(20, 20, 20, .68) !important;
+}
+.pd-donation-single__gallery-item--overflow .pd-donation-single__gallery-zoom { display: none !important; }
+
+.pd-donation-single__gallery-item:focus-visible {
+	outline: 3px solid rgba(233,78,78,.4) !important;
+	outline-offset: 2px !important;
+}
+
+/* ---- Main goals checklist ----- */
+.pd-donation-single__goals {
+	margin-top: 8px !important;
+	padding: 26px 28px !important;
+	background: #fff !important;
+	border: 1px solid #f4d9c8 !important;
+	border-radius: 16px !important;
+	box-shadow: 0 4px 18px rgba(196,110,70,.06) !important;
+}
+@media (max-width: 480px) {
+	.pd-donation-single__goals { padding: 22px 20px !important; }
+}
+.pd-donation-single__goals-title {
+	font-family: var(--pd-display-font) !important;
+	font-size: 24px !important;
+	font-weight: 800 !important;
+	color: #1f2a4a !important;
+	margin: 0 0 10px !important;
+	letter-spacing: -.3px !important;
+}
+.pd-donation-single__goals-intro {
+	font-size: 14px !important;
+	color: #6b7488 !important;
+	line-height: 1.65 !important;
+	margin: 0 0 18px !important;
+}
+.pd-donation-single__goals-list {
+	list-style: none !important;
+	padding: 0 !important;
+	margin: 0 !important;
+	display: grid !important;
+	grid-template-columns: 1fr 1fr !important;
+	gap: 10px 28px !important;
+}
+@media (max-width: 540px) { .pd-donation-single__goals-list { grid-template-columns: 1fr !important; } }
+.pd-donation-single__goals-list li {
+	display: flex !important;
+	align-items: flex-start !important;
+	gap: 10px !important;
+	font-size: 14px !important;
+	color: #1f2a4a !important;
+	line-height: 1.5 !important;
+}
+.pd-donation-single__goals-check {
+	color: var(--pd-coral) !important;
+	font-weight: 800 !important;
+	flex-shrink: 0 !important;
+	margin-top: 2px !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	justify-content: center !important;
+}
+
+/* ---- Sticky mobile donate CTA (visible only below 720px) ----- */
+.pd-donation-single__mobile-cta {
+	display: none !important;
+}
+@media (max-width: 720px) {
+	.pd-donation-single__mobile-cta {
+		display: flex !important;
+		position: fixed !important;
+		bottom: 0 !important;
+		left: 0 !important;
+		right: 0 !important;
+		z-index: 90 !important;
+		background: #fff !important;
+		border-top: 1px solid #f0e0d2 !important;
+		padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+		box-shadow: 0 -8px 24px rgba(31, 42, 74, .08) !important;
+		gap: 14px !important;
+		align-items: center !important;
+	}
+	.pd-donation-single__mobile-cta-meta {
+		display: flex !important;
+		flex-direction: column !important;
+		line-height: 1 !important;
+		flex-shrink: 0 !important;
+	}
+	.pd-donation-single__mobile-cta-progress {
+		font-family: var(--pd-display-font) !important;
+		font-size: 22px !important;
+		font-weight: 800 !important;
+		color: var(--pd-coral) !important;
+	}
+	.pd-donation-single__mobile-cta-label {
+		font-size: 10px !important;
+		font-weight: 600 !important;
+		color: #95a0b2 !important;
+		letter-spacing: 1px !important;
+		text-transform: uppercase !important;
+		margin-top: 3px !important;
+	}
+	.pd-donation-single__mobile-cta-btn {
+		flex: 1 !important;
+		min-height: 44px !important;
+		padding: 12px 18px !important;
+	}
+	/* Make room for the sticky bar so footer/content isn't covered. */
+	.pd-donation-single { padding-bottom: 96px !important; }
+}
+
+/* ---- Sidebar cards ----- */
+.pd-donation-single__sidebar {
+	display: flex !important;
+	flex-direction: column !important;
+	gap: 20px !important;
+	min-width: 0 !important;
+}
+
+.pd-side-card {
+	background: var(--pd-surface) !important;
+	border: 1px solid #f4d9c8 !important;
+	border-radius: 14px !important;
+	padding: 26px 24px !important;
+	box-shadow: 0 4px 18px rgba(196, 110, 70, .06) !important;
+}
+.pd-side-card__title {
+	font-family: var(--pd-display-font) !important;
+	font-size: 22px !important;
+	font-weight: 800 !important;
+	color: #1f2a4a !important;
+	text-align: center !important;
+	margin: 0 0 14px !important;
+	line-height: 1.2 !important;
+	letter-spacing: -.2px !important;
+}
+.pd-side-card__title--light { color: #fff !important; }
+.pd-side-card__text {
+	font-size: 13px !important;
+	color: #6b7488 !important;
+	line-height: 1.6 !important;
+	text-align: center !important;
+	margin: 0 0 20px !important;
+}
+.pd-side-card__text--light { color: rgba(255,255,255,.78) !important; }
+
+/* CTA card */
+.pd-side-card--cta { text-align: center !important; }
+.pd-side-card__cta {
+	display: inline-flex !important;
+	margin: 0 auto !important;
+	min-width: 160px !important;
+}
+
+/* "More campaign" card */
+.pd-side-card--more { padding: 22px 22px 18px !important; }
+.pd-side-card__header {
+	text-align: center !important;
+	margin-bottom: 18px !important;
+}
+.pd-side-card__pill {
+	display: inline-block !important;
+	background: #1f2a4a !important;
+	color: #fff !important;
+	font-size: 14px !important;
+	font-weight: 700 !important;
+	padding: 10px 28px !important;
+	border-radius: 100px !important;
+	letter-spacing: .2px !important;
+}
+.pd-side-card__list {
+	list-style: none !important;
+	padding: 0 !important;
+	margin: 0 !important;
+	display: flex !important;
+	flex-direction: column !important;
+	gap: 14px !important;
+}
+.pd-side-card__list-item {
+	display: flex !important;
+	gap: 12px !important;
+	align-items: flex-start !important;
+}
+.pd-side-card__list-thumb {
+	flex-shrink: 0 !important;
+	width: 64px !important;
+	height: 64px !important;
+	border-radius: 8px !important;
+	overflow: hidden !important;
+	background: var(--pd-surface-soft) !important;
+}
+.pd-side-card__list-thumb img {
+	width: 100% !important;
+	height: 100% !important;
+	object-fit: cover !important;
+	display: block !important;
+}
+.pd-side-card__list-body { min-width: 0 !important; flex: 1 !important; }
+.pd-side-card__list-title {
+	display: block !important;
+	font-family: var(--pd-display-font) !important;
+	font-size: 14px !important;
+	font-weight: 700 !important;
+	color: #1f2a4a !important;
+	text-decoration: none !important;
+	line-height: 1.3 !important;
+	margin-bottom: 4px !important;
+}
+.pd-side-card__list-title:hover { color: var(--pd-coral) !important; }
+.pd-side-card__list-excerpt {
+	font-size: 12px !important;
+	color: #95a0b2 !important;
+	margin: 0 !important;
+	line-height: 1.4 !important;
+	display: -webkit-box !important;
+	-webkit-line-clamp: 2 !important;
+	-webkit-box-orient: vertical !important;
+	overflow: hidden !important;
+}
+
+/* Lead-capture form card (dark) */
+.pd-side-card--lead {
+	background: linear-gradient(155deg, #2a3358 0%, #161a2e 100%) !important;
+	border-color: #161a2e !important;
+	color: #fff !important;
+	padding: 30px 24px !important;
+	text-align: center !important;
+}
+.pd-side-card__form {
+	display: flex !important;
+	flex-direction: column !important;
+	gap: 10px !important;
+}
+.pd-side-card__form input {
+	width: 100% !important;
+	padding: 12px 14px !important;
+	background: #fff !important;
+	border: 1px solid rgba(255,255,255,.18) !important;
+	border-radius: 100px !important;
+	font-size: 13px !important;
+	color: #1f2a4a !important;
+	font-family: var(--pd-body-font) !important;
+}
+.pd-side-card__form input::placeholder { color: #95a0b2 !important; }
+.pd-side-card__form input:focus {
+	outline: none !important;
+	border-color: var(--pd-coral) !important;
+	box-shadow: 0 0 0 3px rgba(233,78,78,.25) !important;
+}
+.pd-side-card__form-submit {
+	margin-top: 4px !important;
+	width: 100% !important;
+}
+.pd-side-card__form-msg {
+	margin: 8px 0 0 !important;
+	font-size: 12px !important;
+	line-height: 1.4 !important;
+	padding: 10px 12px !important;
+	border-radius: 8px !important;
+}
+.pd-side-card__form-msg--success {
+	color: #1b3a26 !important;
+	background: rgba(178, 235, 195, .9) !important;
+}
+.pd-side-card__form-msg--error {
+	color: #fff !important;
+	background: rgba(233, 78, 78, .85) !important;
+}
+.pd-side-card__form-submit:disabled {
+	opacity: .65 !important;
+	cursor: wait !important;
 }

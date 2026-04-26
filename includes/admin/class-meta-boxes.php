@@ -125,31 +125,136 @@ class Meta_Boxes {
 		$this->field_checkbox( $post, '_pd_allow_currency_switch', __( 'Allow Donor to Switch Currency', 'pesa-donations' ) );
 		$this->field_checkbox( $post, '_pd_checkout_require_address', __( 'Require Mailing Address at Checkout', 'pesa-donations' ) );
 
-		echo '<p><strong>' . esc_html__( 'Suggested Amounts (JSON)', 'pesa-donations' ) . '</strong></p>';
-		$amounts = get_post_meta( $post->ID, '_pd_suggested_amounts', true ) ?: '[{"amount":10000,"currency":"UGX"},{"amount":50000,"currency":"UGX"},{"amount":100000,"currency":"UGX"}]';
-		echo '<textarea name="_pd_suggested_amounts" rows="4" class="widefat">' . esc_textarea( $amounts ) . '</textarea>';
-		echo '<p class="description">' . esc_html__( 'JSON array of {amount, currency} objects.', 'pesa-donations' ) . '</p>';
+		// Suggested amounts are now expressed as percentages of the
+		// campaign goal. The actual currency amount is computed at
+		// render time so changing the goal automatically rescales the
+		// suggestions. Donor can still enter any custom amount.
+		$raw      = (string) get_post_meta( $post->ID, '_pd_suggested_amounts', true );
+		$percents = self::parse_percent_csv( $raw );
+		$value    = $percents ? implode( ', ', $percents ) : '';
+
+		echo '<p><strong>' . esc_html__( 'Suggested Amounts (% of goal)', 'pesa-donations' ) . '</strong></p>';
+		echo '<input type="text" name="_pd_suggested_amounts" value="' . esc_attr( $value ) . '" class="widefat" placeholder="5, 10, 25, 50" />';
+		echo '<p class="description">' . esc_html__( 'Comma-separated percentages of the campaign goal (e.g. "5, 10, 25, 50"). Donors will see suggestion buttons that scale with the goal. Leave empty to show no suggestions — donors can still enter a custom amount.', 'pesa-donations' ) . '</p>';
+
+		// Main goals — shown as a checklist on the donation single page.
+		// Stored as a newline-separated string; one goal per line.
+		$goals = (string) get_post_meta( $post->ID, '_pd_main_goals', true );
+		echo '<p style="margin-top:18px;"><strong>' . esc_html__( 'Main Goals', 'pesa-donations' ) . '</strong></p>';
+		echo '<textarea name="_pd_main_goals" rows="6" class="widefat" placeholder="' . esc_attr__( "Build new classrooms\nProvide clean water\nRecruit local teachers", 'pesa-donations' ) . '">' . esc_textarea( $goals ) . '</textarea>';
+		echo '<p class="description">' . esc_html__( 'One goal per line. Shown as a checklist on the donation\'s public page.', 'pesa-donations' ) . '</p>';
 	}
 
 	public function render_sponsorship( \WP_Post $post ): void {
-		$base_currency = get_post_meta( $post->ID, '_pd_base_currency', true ) ?: get_option( 'pd_default_currency', 'UGX' );
+		// Sponsorship plans are named tiers expressed as percentages of
+		// the campaign goal: "Standard:5, Plus:10, Champion:25". The
+		// currency amount is computed at render time from the goal.
+		$raw   = (string) get_post_meta( $post->ID, '_pd_sponsorship_plans', true );
+		$plans = self::parse_plans_csv( $raw );
+		$value = '';
+		if ( $plans ) {
+			$pieces = [];
+			foreach ( $plans as $p ) {
+				$pieces[] = $p['name'] . ':' . $p['percent'];
+			}
+			$value = implode( ', ', $pieces );
+		}
 
-		$defaults_by_currency = [
-			'UGX' => '[{"name":"Standard","amount":150000,"currency":"UGX"},{"name":"Plus","amount":200000,"currency":"UGX"}]',
-			'KES' => '[{"name":"Standard","amount":4500,"currency":"KES"},{"name":"Plus","amount":6000,"currency":"KES"}]',
-			'TZS' => '[{"name":"Standard","amount":90000,"currency":"TZS"},{"name":"Plus","amount":120000,"currency":"TZS"}]',
-			'USD' => '[{"name":"Standard","amount":40,"currency":"USD"},{"name":"Plus","amount":50,"currency":"USD"}]',
-		];
-		$default = $defaults_by_currency[ $base_currency ] ?? $defaults_by_currency['USD'];
-		$plans   = get_post_meta( $post->ID, '_pd_sponsorship_plans', true ) ?: $default;
+		echo '<p>' . esc_html__( 'Sponsorship plan tiers — named buttons donors can pick from (e.g. Standard, Plus, Champion). Each tier is a percentage of the campaign goal.', 'pesa-donations' ) . '</p>';
+		echo '<input type="text" name="_pd_sponsorship_plans" value="' . esc_attr( $value ) . '" class="widefat" placeholder="Standard:5, Plus:10, Champion:25" />';
+		echo '<p class="description">' . esc_html__( 'Comma-separated list of "name:percent" pairs. The donor sees buttons like "Standard — 5% (50,000 UGX)" with the amount auto-computed from the goal. Leave empty to skip plan tiers.', 'pesa-donations' ) . '</p>';
+	}
 
-		echo '<p>' . esc_html__( 'Define sponsorship plan tiers for this campaign (shown as buttons on the checkout).', 'pesa-donations' ) . '</p>';
-		echo '<textarea name="_pd_sponsorship_plans" rows="5" class="widefat">' . esc_textarea( $plans ) . '</textarea>';
-		echo '<p class="description">' . sprintf(
-			/* translators: %s: base currency code */
-			esc_html__( 'JSON array of {name, amount, currency} objects. Campaign base currency is %s — omit the "currency" field to inherit it.', 'pesa-donations' ),
-			'<code>' . esc_html( $base_currency ) . '</code>'
-		) . '</p>';
+	/**
+	 * Parse a "5, 10, 25" string (or legacy JSON of {amount, currency}
+	 * objects, which is silently dropped) into a clean integer percent
+	 * list, clamped 0-100, deduplicated, ordered.
+	 *
+	 * @return int[]
+	 */
+	private static function parse_percent_csv( string $raw ): array {
+		$raw = trim( $raw );
+		if ( '' === $raw ) {
+			return [];
+		}
+		// Legacy JSON input from earlier plugin versions — ignore so the
+		// admin sees an empty field and re-enters as percentages. We do
+		// not try to back-convert because the goal at the time of entry
+		// is unknown.
+		if ( str_starts_with( $raw, '[' ) || str_starts_with( $raw, '{' ) ) {
+			return [];
+		}
+		$out = [];
+		foreach ( explode( ',', $raw ) as $piece ) {
+			$piece = trim( $piece, " \t\n\r%" );
+			if ( '' === $piece || ! is_numeric( $piece ) ) {
+				continue;
+			}
+			$pct = (int) round( (float) $piece );
+			if ( $pct <= 0 || $pct > 100 ) {
+				continue;
+			}
+			$out[ $pct ] = $pct;
+		}
+		ksort( $out );
+		return array_values( $out );
+	}
+
+	/**
+	 * Parse a "Standard:5, Plus:10" string (or legacy JSON, dropped)
+	 * into [ ['name' => 'Standard', 'percent' => 5], ... ]. Names are
+	 * sanitised; percents clamped 0-100. Duplicate names are kept in
+	 * insertion order; the first wins.
+	 *
+	 * @return array<int, array{name:string, percent:int}>
+	 */
+	private static function parse_plans_csv( string $raw ): array {
+		$raw = trim( $raw );
+		if ( '' === $raw ) {
+			return [];
+		}
+		// Legacy JSON — ignore (admin re-enters as name:percent).
+		if ( str_starts_with( $raw, '[' ) || str_starts_with( $raw, '{' ) ) {
+			return [];
+		}
+		$out  = [];
+		$seen = [];
+		foreach ( explode( ',', $raw ) as $piece ) {
+			$piece = trim( $piece );
+			if ( '' === $piece || ! str_contains( $piece, ':' ) ) {
+				continue;
+			}
+			[ $name, $pct ] = array_map( 'trim', explode( ':', $piece, 2 ) );
+			$name = sanitize_text_field( $name );
+			$pct  = (int) round( (float) trim( $pct, " \t\n\r%" ) );
+			if ( '' === $name || $pct <= 0 || $pct > 100 ) {
+				continue;
+			}
+			$key = strtolower( $name );
+			if ( isset( $seen[ $key ] ) ) {
+				continue;
+			}
+			$seen[ $key ] = true;
+			$out[]        = [ 'name' => $name, 'percent' => $pct ];
+		}
+		return $out;
+	}
+
+	/**
+	 * Public accessor for the parsers — used by Campaign model to render
+	 * suggestions on the donor checkout.
+	 *
+	 * @return int[]
+	 */
+	public static function read_suggested_percents( int $post_id ): array {
+		return self::parse_percent_csv( (string) get_post_meta( $post_id, '_pd_suggested_amounts', true ) );
+	}
+
+	/**
+	 * @return array<int, array{name:string, percent:int}>
+	 */
+	public static function read_sponsorship_plans( int $post_id ): array {
+		return self::parse_plans_csv( (string) get_post_meta( $post_id, '_pd_sponsorship_plans', true ) );
 	}
 
 	public function render_gallery( \WP_Post $post ): void {
@@ -341,7 +446,6 @@ class Meta_Boxes {
 			'_pd_show_progress_bar', '_pd_show_donor_count', '_pd_checkout_require_address',
 		];
 
-		$json_fields = [ '_pd_suggested_amounts', '_pd_sponsorship_plans' ];
 		$id_list_fields = [ '_pd_gallery_ids' ];
 
 		foreach ( $text_fields as $key ) {
@@ -353,12 +457,36 @@ class Meta_Boxes {
 		foreach ( $checkbox_fields as $key ) {
 			update_post_meta( $post_id, $key, isset( $_POST[ $key ] ) ? '1' : '0' );
 		}
-		foreach ( $json_fields as $key ) {
-			if ( isset( $_POST[ $key ] ) ) {
-				$raw = wp_unslash( $_POST[ $key ] );
-				$decoded = json_decode( $raw, true );
-				update_post_meta( $post_id, $key, $decoded ? wp_json_encode( $decoded ) : '' );
+
+		// Suggested amounts — list of percentages of goal. Normalize
+		// input through the parser so we don't store unvalidated strings.
+		if ( isset( $_POST['_pd_suggested_amounts'] ) ) {
+			$pcts = self::parse_percent_csv( (string) wp_unslash( $_POST['_pd_suggested_amounts'] ) );
+			update_post_meta( $post_id, '_pd_suggested_amounts', $pcts ? implode( ',', $pcts ) : '' );
+		}
+
+		// Sponsorship plans — list of name:percent pairs.
+		if ( isset( $_POST['_pd_sponsorship_plans'] ) ) {
+			$plans = self::parse_plans_csv( (string) wp_unslash( $_POST['_pd_sponsorship_plans'] ) );
+			$store = [];
+			foreach ( $plans as $p ) {
+				$store[] = $p['name'] . ':' . $p['percent'];
 			}
+			update_post_meta( $post_id, '_pd_sponsorship_plans', $store ? implode( ',', $store ) : '' );
+		}
+
+		// Main goals — newline-separated; trim and drop empty lines.
+		if ( isset( $_POST['_pd_main_goals'] ) ) {
+			$raw   = (string) wp_unslash( $_POST['_pd_main_goals'] );
+			$lines = preg_split( '/\r\n|\r|\n/', $raw );
+			$clean = [];
+			foreach ( $lines as $line ) {
+				$line = trim( sanitize_text_field( $line ) );
+				if ( '' !== $line ) {
+					$clean[] = $line;
+				}
+			}
+			update_post_meta( $post_id, '_pd_main_goals', implode( "\n", $clean ) );
 		}
 
 		foreach ( $id_list_fields as $key ) {

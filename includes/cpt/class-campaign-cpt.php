@@ -23,6 +23,100 @@ class Campaign_CPT {
 
 		add_filter( 'manage_' . self::POST_TYPE . '_posts_columns', [ $this, 'custom_columns' ] );
 		add_action( 'manage_' . self::POST_TYPE . '_posts_custom_column', [ $this, 'render_column' ], 10, 2 );
+
+		// Yoast Duplicate Post (and the older non-Yoast fork) gates each
+		// post type behind an opt-in option which defaults to ['post', 'page'].
+		// Wire pd_campaign in via their public filter so the Clone / New
+		// Draft / Rewrite & Republish row actions appear on Campaigns out
+		// of the box, with no admin toggle required. Filter is a no-op if
+		// the plugin is not active.
+		add_filter( 'duplicate_post_enabled_post_types', [ $this, 'enable_duplicate_post' ] );
+
+		// Admin: filter the campaigns list by ?pd_category=project|sponsorship
+		// so the split "Donations" and "Sponsorships" submenu items show
+		// only their respective campaigns.
+		add_action( 'pre_get_posts', [ $this, 'filter_admin_list_by_category' ] );
+
+		// Pre-fill the category meta box when an admin clicks "Add New
+		// Donation" (?pd_category=project) or "Add New Sponsorship"
+		// (?pd_category=sponsorship) so the editor opens with the right
+		// type already selected.
+		add_action( 'admin_head-post-new.php', [ $this, 'inject_default_category' ] );
+	}
+
+	public function filter_admin_list_by_category( \WP_Query $query ): void {
+		if ( ! is_admin() || ! $query->is_main_query() ) {
+			return;
+		}
+		global $pagenow;
+		if ( 'edit.php' !== $pagenow ) {
+			return;
+		}
+		if ( self::POST_TYPE !== ( $query->get( 'post_type' ) ?: '' ) ) {
+			return;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$cat = isset( $_GET['pd_category'] ) ? sanitize_key( wp_unslash( $_GET['pd_category'] ) ) : '';
+		if ( ! $cat ) {
+			return;
+		}
+		$values = 'sponsorship' === $cat
+			? [ 'sponsorship', 'child' ]
+			: [ 'project', 'school', 'hospital', 'medical', 'other' ];
+
+		// Merge with any existing meta_query so we don't blow away
+		// filters that other plugins set on the same edit.php query.
+		$existing = (array) $query->get( 'meta_query', [] );
+		$existing[] = [
+			'key'     => '_pd_category',
+			'value'   => $values,
+			'compare' => 'IN',
+		];
+		if ( ! isset( $existing['relation'] ) && count( $existing ) > 1 ) {
+			$existing['relation'] = 'AND';
+		}
+		$query->set( 'meta_query', $existing );
+	}
+
+	public function inject_default_category(): void {
+		$screen = get_current_screen();
+		if ( ! $screen || self::POST_TYPE !== $screen->post_type ) {
+			return;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$cat = isset( $_GET['pd_category'] ) ? sanitize_key( wp_unslash( $_GET['pd_category'] ) ) : '';
+		if ( ! in_array( $cat, [ 'project', 'sponsorship' ], true ) ) {
+			return;
+		}
+		// Inline JS that sets the category select on page load. Cleaner than
+		// a server-side default because the meta box uses select_meta(...) and
+		// reading get_post_meta on a brand-new post returns nothing anyway.
+		?>
+		<script>
+		(function(){
+			document.addEventListener('DOMContentLoaded', function(){
+				var sel = document.getElementById('_pd_category');
+				if (sel && !sel.value) { sel.value = <?php echo wp_json_encode( $cat ); ?>; }
+			});
+		})();
+		</script>
+		<?php
+	}
+
+	/**
+	 * Add pd_campaign to Yoast Duplicate Post's allowlist.
+	 *
+	 * @param mixed $types Whatever the filter chain has so far — usually an
+	 *                     array, but a defensive cast keeps us safe if a
+	 *                     prior callback returned a string or null.
+	 * @return array
+	 */
+	public function enable_duplicate_post( $types ): array {
+		$types = is_array( $types ) ? $types : ( $types ? [ (string) $types ] : [] );
+		if ( ! in_array( self::POST_TYPE, $types, true ) ) {
+			$types[] = self::POST_TYPE;
+		}
+		return $types;
 	}
 
 	private function labels(): array {

@@ -4,6 +4,77 @@
  */
 
 /* =========================================================================
+   Donation Gallery Lightbox — used on the single donation page
+   (templates/single-donation.php). Self-contained: takes a gallery array
+   and provides keyboard-navigable, full-screen image preview with
+   prev/next, thumb strip, and counter — same UX as the sponsor card
+   modal's lightbox, but without the surrounding details modal.
+   Usage: x-data="pdDonationGallery(galleryJson)"
+   =========================================================================*/
+function pdDonationGallery(galleryJson) {
+	return {
+		gallery:       [],
+		lightboxOpen:  false,
+		lightboxIndex: 0,
+
+		init() {
+			try {
+				this.gallery = typeof galleryJson === 'string'
+					? JSON.parse(galleryJson)
+					: (Array.isArray(galleryJson) ? galleryJson : []);
+			} catch (e) {
+				this.gallery = [];
+			}
+
+			// Global keyboard nav while lightbox is open.
+			document.addEventListener('keydown', (e) => {
+				if (!this.lightboxOpen) return;
+				if (e.key === 'Escape')     { this.closeLightbox(); }
+				else if (e.key === 'ArrowRight') { this.lightboxNext(); }
+				else if (e.key === 'ArrowLeft')  { this.lightboxPrev(); }
+			});
+		},
+
+		openLightbox(index) {
+			if (!this.gallery.length) return;
+			this.lightboxIndex = Math.max(0, Math.min(index, this.gallery.length - 1));
+			this.lightboxOpen  = true;
+			document.body.style.overflow = 'hidden';
+			this.scrollActiveThumbIntoView();
+		},
+		closeLightbox() {
+			this.lightboxOpen = false;
+			document.body.style.overflow = '';
+		},
+		lightboxNext() {
+			if (!this.gallery.length) return;
+			this.lightboxIndex = (this.lightboxIndex + 1) % this.gallery.length;
+			this.scrollActiveThumbIntoView();
+		},
+		lightboxPrev() {
+			if (!this.gallery.length) return;
+			this.lightboxIndex = (this.lightboxIndex - 1 + this.gallery.length) % this.gallery.length;
+			this.scrollActiveThumbIntoView();
+		},
+		scrollActiveThumbIntoView() {
+			this.$nextTick(() => {
+				const strip = this.$refs.strip;
+				if (!strip) return;
+				const active = strip.querySelector('.pd-lightbox__thumb--active');
+				if (active && active.scrollIntoView) {
+					active.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+				}
+			});
+		},
+		get lightboxImage() {
+			const item = this.gallery[this.lightboxIndex];
+			return item ? item.full : '';
+		},
+		get lightboxTotal() { return this.gallery.length; },
+	};
+}
+
+/* =========================================================================
    Campaign List — unified component for sponsorships AND projects.
    Handles: details modal, gallery lightbox.
    Usage: x-data="pdCampaignList(jsonData)"
@@ -505,6 +576,7 @@ function pdCheckout(configJson) {
 			confirm_email: '',
 			phone:         '',
 			country:       '',
+			org_name:      '',
 			address1:      '',
 			address2:      '',
 			city:          '',
@@ -638,6 +710,9 @@ function pdCheckout(configJson) {
 			if (!this.formData.last_name.trim()) {
 				errs.last_name = pdL10n('Last name is required.');
 			}
+			if (this.isOrg && !this.formData.org_name.trim()) {
+				errs.org_name = pdL10n('Organization name is required.');
+			}
 			if (!this.formData.email.trim() || !this.formData.email.includes('@')) {
 				errs.email = pdL10n('A valid email address is required.');
 			}
@@ -696,6 +771,8 @@ function pdCheckout(configJson) {
 			body.append('country',     this.formData.country);
 			body.append('message',     this.formData.notes);
 			body.append('updates',     this.formData.updates ? '1' : '0');
+			body.append('is_org',      this.isOrg ? '1' : '0');
+			body.append('org_name',    this.isOrg ? this.formData.org_name : '');
 
 			try {
 				console.log('[PesaDonations] sending AJAX', this.ajaxUrl);
@@ -744,10 +821,11 @@ function pdL10n(str) {
    Expose on window so Alpine's x-data can find them regardless of
    script load order.
    =========================================================================*/
-window.pdCampaignList    = pdCampaignList;
-window.pdSponsorshipList = pdSponsorshipList;
-window.pdCheckout        = pdCheckout;
-window.pdDonateButton    = pdDonateButton;
+window.pdCampaignList     = pdCampaignList;
+window.pdSponsorshipList  = pdSponsorshipList;
+window.pdCheckout         = pdCheckout;
+window.pdDonateButton     = pdDonateButton;
+window.pdDonationGallery  = pdDonationGallery;
 
 document.addEventListener('alpine:init', () => {
 	console.log('[PesaDonations] Alpine init — components ready');

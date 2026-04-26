@@ -19,6 +19,129 @@ class Ajax_Handler {
 
 		add_action( 'wp_ajax_pd_lookup_donor',        [ $this, 'lookup_donor' ] );
 		add_action( 'wp_ajax_nopriv_pd_lookup_donor', [ $this, 'lookup_donor' ] );
+
+		add_action( 'wp_ajax_pd_submit_lead',        [ $this, 'submit_lead' ] );
+		add_action( 'wp_ajax_nopriv_pd_submit_lead', [ $this, 'submit_lead' ] );
+	}
+
+	/**
+	 * Handle the "Raise Hand For Charity" lead form on the donation
+	 * single page. Public endpoint — nonce + per-IP rate limit. Composes
+	 * a simple HTML email and sends it via wp_mail() to the address
+	 * configured in Settings → Emails → "Lead Form Email" (falling back
+	 * to the Admin Alerts email, then the site admin email). Reply-To
+	 * is set to the lead's own email so admins can respond directly.
+	 */
+	public function submit_lead(): void {
+		$this->verify_nonce();
+
+		// Per-IP rate limit: 3 submissions per 10 minutes.
+		$ip_key = 'pd_lead_rl_' . md5( (string) ( $_SERVER['REMOTE_ADDR'] ?? '0' ) );
+		$hits   = (int) get_transient( $ip_key );
+		if ( $hits >= 3 ) {
+			wp_send_json_error( [
+				'message' => __( 'Too many submissions. Please try again in a few minutes.', 'pesa-donations' ),
+			], 429 );
+		}
+		set_transient( $ip_key, $hits + 1, 10 * MINUTE_IN_SECONDS );
+
+		$name        = sanitize_text_field( wp_unslash( $_POST['lead_name']  ?? '' ) );
+		$email       = sanitize_email(      wp_unslash( $_POST['lead_email'] ?? '' ) );
+		$phone       = Sanitizer::phone(    $_POST['lead_phone'] ?? '' );
+		$campaign_id = isset( $_POST['campaign_id'] ) ? (int) $_POST['campaign_id'] : 0;
+		$source_url  = isset( $_POST['source_url'] )
+			? esc_url_raw( wp_unslash( $_POST['source_url'] ) )
+			: '';
+
+		if ( ! $name || ! $email || ! $phone ) {
+			wp_send_json_error( [ 'message' => __( 'Name, email and phone are all required.', 'pesa-donations' ) ], 422 );
+		}
+		if ( strlen( $name ) > 100 || strlen( $phone ) > 30 ) {
+			wp_send_json_error( [ 'message' => __( 'Submission too long.', 'pesa-donations' ) ], 422 );
+		}
+		if ( ! is_email( $email ) ) {
+			wp_send_json_error( [ 'message' => __( 'Please enter a valid email address.', 'pesa-donations' ) ], 422 );
+		}
+
+		// Resolve the destination address.
+		$to = (string) get_option( 'pd_lead_form_email', '' );
+		if ( ! $to ) {
+			$to = (string) get_option( 'pd_admin_alert_email', '' );
+		}
+		if ( ! $to ) {
+			$to = (string) get_bloginfo( 'admin_email' );
+		}
+		if ( ! $to || ! is_email( $to ) ) {
+			\PesaDonations\Utils\Logger::error( 'Lead form: no destination email configured' );
+			wp_send_json_error( [ 'message' => __( 'Lead destination email is not configured. Please contact the site administrator.', 'pesa-donations' ) ], 500 );
+		}
+
+		// Campaign context for the alert body.
+		$campaign_title = '';
+		if ( $campaign_id ) {
+			$post = get_post( $campaign_id );
+			if ( $post && \PesaDonations\CPT\Campaign_CPT::POST_TYPE === $post->post_type ) {
+				$campaign_title = (string) $post->post_title;
+			}
+		}
+
+		$site_name = (string) get_bloginfo( 'name' );
+
+		// Concatenate (rather than sprintf %s) so a site whose name
+		// contains a literal "%" character doesn't break the subject.
+		$subject = __( 'New "Raise Hand for Charity" enquiry — ', 'pesa-donations' ) . $site_name;
+
+		$body  = '<p>' . esc_html__( 'A new lead has been submitted from the donation page:', 'pesa-donations' ) . '</p>';
+		$body .= '<table cellpadding="6" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px;">';
+		$body .= '<tr><td><strong>' . esc_html__( 'Name', 'pesa-donations' )  . ':</strong></td><td>' . esc_html( $name )  . '</td></tr>';
+		$body .= '<tr><td><strong>' . esc_html__( 'Email', 'pesa-donations' ) . ':</strong></td><td><a href="mailto:' . esc_attr( $email ) . '">' . esc_html( $email ) . '</a></td></tr>';
+		$body .= '<tr><td><strong>' . esc_html__( 'Phone', 'pesa-donations' ) . ':</strong></td><td>' . esc_html( $phone ) . '</td></tr>';
+		if ( $campaign_title ) {
+			$body .= '<tr><td><strong>' . esc_html__( 'Campaign', 'pesa-donations' ) . ':</strong></td><td>' . esc_html( $campaign_title ) . '</td></tr>';
+		}
+		if ( $source_url ) {
+			$body .= '<tr><td><strong>' . esc_html__( 'Page', 'pesa-donations' ) . ':</strong></td><td><a href="' . esc_url( $source_url ) . '">' . esc_html( $source_url ) . '</a></td></tr>';
+		}
+		$body .= '<tr><td><strong>' . esc_html__( 'Submitted', 'pesa-donations' ) . ':</strong></td><td>' . esc_html( current_time( 'mysql' ) ) . '</td></tr>';
+		$body .= '</table>';
+
+		// Build clean From + Reply-To headers. Strip CRLF defensively even
+		// though the option-save path also strips it.
+		$from_name  = str_replace( [ "\r", "\n" ], '', (string) get_option( 'pd_email_from_name',    $site_name ) );
+		$from_email = str_replace( [ "\r", "\n" ], '', (string) get_option( 'pd_email_from_address', get_bloginfo( 'admin_email' ) ) );
+
+		$headers = [
+			'Content-Type: text/html; charset=UTF-8',
+			sprintf( 'From: %s <%s>', $from_name, $from_email ),
+			'Reply-To: ' . $email,
+		];
+
+		// Capture the underlying SMTP error (if any) just for this send,
+		// so log entries include a meaningful reason instead of just
+		// "wp_mail returned false". Removed immediately after.
+		$mail_error = null;
+		$capture    = static function ( \WP_Error $err ) use ( &$mail_error ): void {
+			$mail_error = $err;
+		};
+		add_action( 'wp_mail_failed', $capture );
+
+		$sent = wp_mail( $to, $subject, $body, $headers );
+
+		remove_action( 'wp_mail_failed', $capture );
+
+		if ( ! $sent ) {
+			\PesaDonations\Utils\Logger::error( 'Lead form: wp_mail failed', [
+				'to'      => $to,
+				'subject' => $subject,
+				'reason'  => $mail_error ? $mail_error->get_error_message() : 'unknown',
+				'data'    => $mail_error ? $mail_error->get_error_data()    : null,
+			] );
+			wp_send_json_error( [ 'message' => __( 'Could not send your message. Please try again or contact us directly.', 'pesa-donations' ) ], 500 );
+		}
+
+		wp_send_json_success( [
+			'message' => __( 'Thanks! We received your details and will reach out soon.', 'pesa-donations' ),
+		] );
 	}
 
 	/**
@@ -131,6 +254,10 @@ class Ajax_Handler {
 		$message    = sanitize_textarea_field( wp_unslash( $_POST['message'] ?? '' ) );
 		$anonymous  = ! empty( $_POST['anonymous'] );
 		$updates    = ! empty( $_POST['updates'] ) ? 1 : 0;
+		// Organization branch — only honour the org_name if the donor
+		// actually toggled the org switch on. Empties otherwise.
+		$is_org     = ! empty( $_POST['is_org'] );
+		$org_name   = $is_org ? sanitize_text_field( wp_unslash( $_POST['org_name'] ?? '' ) ) : '';
 
 		if ( ! $email && ! $phone ) {
 			wp_send_json_error( [ 'message' => __( 'Email or phone number is required.', 'pesa-donations' ) ], 422 );
@@ -141,6 +268,7 @@ class Ajax_Handler {
 			'last_name'     => $last_name,
 			'phone'         => $phone,
 			'country'       => $country,
+			'organization'  => $org_name,
 			'wants_updates' => $updates,
 		] );
 
@@ -154,19 +282,20 @@ class Ajax_Handler {
 
 		// Create the donation row.
 		$donation_id = Donation::create( [
-			'campaign_id'  => $campaign_id,
-			'donor_id'     => $donor_id,
-			'amount'       => $amount,
-			'currency'     => $currency,
-			'amount_base'  => $amount,  // FX conversion applied in gateway init.
-			'gateway'      => $gateway,
-			'donor_name'   => $anonymous ? '' : trim( $first_name . ' ' . $last_name ),
-			'donor_email'  => $email,
-			'donor_phone'  => $phone,
-			'donor_country' => $country,
-			'donor_ip'     => $this->get_ip(),
-			'is_anonymous' => $anonymous ? 1 : 0,
-			'message'      => $message,
+			'campaign_id'        => $campaign_id,
+			'donor_id'           => $donor_id,
+			'amount'             => $amount,
+			'currency'           => $currency,
+			'amount_base'        => $amount,  // FX conversion applied in gateway init.
+			'gateway'            => $gateway,
+			'donor_name'         => $anonymous ? '' : trim( $first_name . ' ' . $last_name ),
+			'donor_organization' => $anonymous ? '' : $org_name,
+			'donor_email'        => $email,
+			'donor_phone'        => $phone,
+			'donor_country'      => $country,
+			'donor_ip'           => $this->get_ip(),
+			'is_anonymous'       => $anonymous ? 1 : 0,
+			'message'            => $message,
 		] );
 
 		if ( ! $donation_id ) {

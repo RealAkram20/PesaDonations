@@ -22,6 +22,58 @@ class PD_Public {
 		// shortcode output when multiple shortcodes share a page. Our output is
 		// already valid HTML — auto-paragraphing breaks the layout.
 		add_filter( 'the_content', [ $this, 'unwrap_shortcode_paragraphs' ], 12 );
+
+		// Load our dedicated single-donation template for project-type
+		// campaigns. Sponsorship campaigns continue to use the theme's
+		// standard single template.
+		add_filter( 'single_template', [ $this, 'load_donation_single_template' ] );
+	}
+
+	/**
+	 * Swap in templates/single-donation.php when WordPress is about to
+	 * render a single pd_campaign post whose category is project-like.
+	 * Theme override: place a copy at
+	 *   /wp-content/themes/{theme}/pesa-donations/single-donation.php
+	 *
+	 * Returns the FILE PATH for the WP template loader to include — does
+	 * not render directly. Including-and-exiting here would skip every
+	 * other `template_include` filter registered after ours and break
+	 * caching plugins / block-theme rendering.
+	 *
+	 * The template needs `$campaign` in scope; we stash it on a global
+	 * the template reads back. Avoids a class property leak across
+	 * requests in long-running PHP processes.
+	 */
+	public function load_donation_single_template( string $template ): string {
+		if ( ! is_singular( \PesaDonations\CPT\Campaign_CPT::POST_TYPE ) ) {
+			return $template;
+		}
+		$post_id  = (int) get_queried_object_id();
+		$category = (string) get_post_meta( $post_id, '_pd_category', true );
+		$donation_categories = [ 'project', 'school', 'hospital', 'medical', 'other' ];
+		if ( ! in_array( $category, $donation_categories, true ) ) {
+			return $template;
+		}
+
+		$campaign = \PesaDonations\Models\Campaign::get( $post_id );
+		if ( ! $campaign ) {
+			return $template;
+		}
+
+		$theme_file  = get_stylesheet_directory() . '/pesa-donations/single-donation.php';
+		$plugin_file = PD_PLUGIN_DIR . 'templates/single-donation.php';
+		$file        = file_exists( $theme_file ) ? $theme_file : $plugin_file;
+
+		if ( ! file_exists( $file ) ) {
+			return $template;
+		}
+
+		// Stash campaign so the template can pull it back without a
+		// global — keeps template authors from depending on the loader's
+		// scope semantics.
+		$GLOBALS['pd_donation_campaign'] = $campaign;
+
+		return $file;
 	}
 
 	/**
@@ -30,7 +82,10 @@ class PD_Public {
 	 * expanded (priority 12 — do_shortcode is 11).
 	 */
 	public function unwrap_shortcode_paragraphs( string $content ): string {
-		$containers = [ 'pd-slider', 'pd-browse', 'pd-checkout', 'pd-thanks', 'pd-donate-btn-wrap' ];
+		$containers = [
+			'pd-slider', 'pd-browse', 'pd-checkout', 'pd-thanks',
+			'pd-donate-btn-wrap', 'pd-donation-card', 'pd-donation-single',
+		];
 
 		foreach ( $containers as $class ) {
 			// Remove <p> or <br> immediately BEFORE our container's opening tag.
@@ -173,6 +228,12 @@ class PD_Public {
 	}
 
 	private function page_has_shortcode(): bool {
+		// Single donation/sponsorship post: always load our assets so the
+		// custom template's styles + Alpine bits work.
+		if ( is_singular( \PesaDonations\CPT\Campaign_CPT::POST_TYPE ) ) {
+			return true;
+		}
+
 		global $post;
 		if ( ! $post ) {
 			return false;

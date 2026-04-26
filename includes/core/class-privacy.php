@@ -51,6 +51,9 @@ class Privacy {
 		$done    = true;
 
 		if ( $donor ) {
+			// Donor profile entry: emit only on the first page so
+			// multi-page exports don't duplicate it in the WP exporter ZIP.
+			if ( 1 === $page ) {
 			$exports[] = [
 				'group_id'    => 'pd-donor',
 				'group_label' => __( 'Donor profile', 'pesa-donations' ),
@@ -67,6 +70,7 @@ class Privacy {
 					[ 'name' => __( 'Last donation', 'pesa-donations' ),  'value' => (string) $donor['last_donation_at'] ],
 				],
 			];
+			}
 
 			$offset = ( $page - 1 ) * $per;
 			$rows   = $wpdb->get_results( $wpdb->prepare(
@@ -104,39 +108,68 @@ class Privacy {
 	public function erase( string $email, int $page = 1 ): array {
 		global $wpdb;
 		$email = strtolower( sanitize_email( $email ) );
+		$page  = max( 1, $page );
+		$batch = 500;  // donations to anonymize per pass
 
 		$messages = [];
 		$removed  = false;
 		$retained = false;
+		$done     = true;
 
 		$donor_id = (int) $wpdb->get_var( $wpdb->prepare(
 			"SELECT id FROM {$wpdb->prefix}pd_donors WHERE email = %s",
 			$email
 		) );
 
-		if ( $donor_id ) {
-			// Anonymize donations rather than delete them: completed
-			// donations are accounting records that the site needs to
-			// keep. Drop everything that identifies the donor.
-			$wpdb->update(
-				$wpdb->prefix . 'pd_donations',
-				[
-					'donor_id'      => null,
-					'donor_name'    => '',
-					'donor_email'   => '',
-					'donor_phone'   => '',
-					'donor_country' => '',
-					'donor_ip'      => '',
-					'message'       => '',
-					'is_anonymous'  => 1,
-					'updated_at'    => current_time( 'mysql' ),
-				],
-				[ 'donor_id' => $donor_id ]
-			);
+		if ( ! $donor_id ) {
+			return [
+				'items_removed'  => false,
+				'items_retained' => false,
+				'messages'       => [],
+				'done'           => true,
+			];
+		}
 
-			// Remove the donor profile row itself.
+		// Anonymize donations in batches so we don't lock the donations
+		// table for minutes on a donor with thousands of records. Each
+		// pass clears `donor_id` so the same rows aren't re-found on the
+		// next call — the WP eraser will keep invoking us until done.
+		$donations = $wpdb->prefix . 'pd_donations';
+		$ids       = $wpdb->get_col( $wpdb->prepare(
+			"SELECT id FROM {$donations} WHERE donor_id = %d ORDER BY id LIMIT %d",
+			$donor_id,
+			$batch
+		) );
+
+		if ( ! empty( $ids ) ) {
+			$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+			$wpdb->query( $wpdb->prepare(
+				"UPDATE {$donations} SET
+					donor_id = NULL,
+					donor_name = '',
+					donor_organization = '',
+					donor_email = '',
+					donor_phone = '',
+					donor_country = '',
+					donor_ip = '',
+					message = '',
+					is_anonymous = 1,
+					updated_at = %s
+				WHERE id IN ({$placeholders})",
+				array_merge( [ current_time( 'mysql' ) ], $ids )
+			) );
+
+			$removed  = true;
+			$retained = true;
+
+			// More to do if we filled the batch.
+			$done = count( $ids ) < $batch;
+		}
+
+		// Only delete the donor profile row on the FINAL pass so the
+		// SELECT above can keep finding the remaining donations.
+		if ( $done ) {
 			$wpdb->delete( $wpdb->prefix . 'pd_donors', [ 'id' => $donor_id ] );
-
 			$removed    = true;
 			$retained   = true;
 			$messages[] = __( 'Donor profile removed; completed donations anonymized for accounting.', 'pesa-donations' );
@@ -146,7 +179,7 @@ class Privacy {
 			'items_removed'  => $removed,
 			'items_retained' => $retained,
 			'messages'       => $messages,
-			'done'           => true,
+			'done'           => $done,
 		];
 	}
 }

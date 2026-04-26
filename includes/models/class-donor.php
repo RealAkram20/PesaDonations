@@ -22,18 +22,29 @@ class Donor {
 		);
 
 		if ( $row ) {
+			$updates = [];
+
 			// Sticky-true opt-in: if the new submission opts the donor in
 			// to updates, persist it. Don't silently demote a previously
 			// subscribed donor when they leave the box unchecked on a
 			// later donation — opt-out must be explicit (admin or
 			// dedicated unsubscribe link).
 			if ( ! empty( $extra['wants_updates'] ) && empty( $row['wants_updates'] ) ) {
-				$wpdb->update(
-					$table,
-					[ 'wants_updates' => 1, 'updated_at' => current_time( 'mysql' ) ],
-					[ 'id' => (int) $row['id'] ]
-				);
-				$row['wants_updates'] = 1;
+				$updates['wants_updates'] = 1;
+			}
+
+			// Organization: persist whenever supplied. Donors may join an
+			// org later (set), or move orgs (change). We don't auto-clear
+			// when an empty value is supplied — explicit clear must be
+			// done from the admin Donor editor.
+			if ( ! empty( $extra['organization'] ) && (string) $extra['organization'] !== (string) ( $row['organization'] ?? '' ) ) {
+				$updates['organization'] = (string) $extra['organization'];
+			}
+
+			if ( $updates ) {
+				$updates['updated_at'] = current_time( 'mysql' );
+				$wpdb->update( $table, $updates, [ 'id' => (int) $row['id'] ] );
+				$row = array_merge( $row, $updates );
 			}
 			return new self( $row );
 		}

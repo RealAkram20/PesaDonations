@@ -26,11 +26,14 @@ class Plugin {
 	}
 
 	public function run(): void {
+		// Schema migration BEFORE anything else. Must run earlier than
+		// AJAX, IPN, or cron handlers — otherwise a freshly-updated
+		// plugin can hit Unknown column errors on any request that
+		// arrives before the next admin pageview.
+		add_action( 'plugins_loaded', [ Installer::class, 'maybe_upgrade' ], 1 );
+
 		add_action( 'plugins_loaded', [ $this, 'check_wp_version' ] );
 		add_action( 'plugins_loaded', [ $this, 'self_heal' ], 20 );
-		// Run schema migrations on admin loads so new tables/indexes added in
-		// later plugin versions get applied without a deactivate/reactivate.
-		add_action( 'admin_init', [ Installer::class, 'maybe_upgrade' ] );
 		add_action( 'init', [ $this, 'load_textdomain' ] );
 		add_action( 'init', [ $this, 'register_cpt' ] );
 

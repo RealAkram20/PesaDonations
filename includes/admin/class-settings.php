@@ -172,6 +172,7 @@ class Settings {
 		$this->input( 'pd_email_from_name',    __( 'From Name', 'pesa-donations' ) );
 		$this->input( 'pd_email_from_address', __( 'From Email', 'pesa-donations' ), 'email' );
 		$this->input( 'pd_admin_alert_email',  __( 'Admin Alerts To', 'pesa-donations' ), 'email', __( 'Where to send "new donation" notifications. Leave blank to use the site admin email.', 'pesa-donations' ) );
+		$this->input( 'pd_lead_form_email',    __( 'Lead Form Email', 'pesa-donations' ), 'email', __( 'Where to send the "Raise Hand For Charity" form submissions from the donation pages. Leave blank to fall back to the Admin Alerts email above.', 'pesa-donations' ) );
 
 		$footer = (string) get_option( 'pd_email_footer', '' );
 		$this->row(
@@ -583,24 +584,28 @@ class Settings {
 				'tag'         => 'pd_sponsor_slider',
 				'purpose'     => __( 'Horizontal carousel of sponsorship cards with prev/next arrows. Great for homepage sections.', 'pesa-donations' ),
 				'params'      => [
-					'limit'    => __( 'Max campaigns to include (default 10)', 'pesa-donations' ),
-					'per_view' => __( 'Cards visible at once: 1-5 (default 3)', 'pesa-donations' ),
-					'autoplay' => __( 'true / false (default false)', 'pesa-donations' ),
-					'interval' => __( 'Autoplay delay in ms (default 4500)', 'pesa-donations' ),
+					'limit'           => __( 'Max campaigns to include (default 10)', 'pesa-donations' ),
+					'per_view'        => __( 'Cards visible at once on desktop, > 960px wide: 1-5 (default 3)', 'pesa-donations' ),
+					'per_view_tablet' => __( 'Cards visible at once on tablet, 561-960px: 1-5 (default 2)', 'pesa-donations' ),
+					'per_view_mobile' => __( 'Cards visible at once on mobile, ≤ 560px: 1-5 (default 1)', 'pesa-donations' ),
+					'autoplay'        => __( 'true / false (default false)', 'pesa-donations' ),
+					'interval'        => __( 'Autoplay delay in ms (default 4500)', 'pesa-donations' ),
 				],
-				'example'     => '[pd_sponsor_slider per_view="3" autoplay="true"]',
+				'example'     => '[pd_sponsor_slider per_view="4" per_view_tablet="2" per_view_mobile="1" autoplay="true"]',
 				'recommended' => __( 'Drop into a homepage section under the hero.', 'pesa-donations' ),
 			],
 			[
 				'tag'         => 'pd_give_slider',
 				'purpose'     => __( 'Horizontal carousel of project cards with prev/next arrows. Great for homepage sections.', 'pesa-donations' ),
 				'params'      => [
-					'limit'    => __( 'Max campaigns to include (default 10)', 'pesa-donations' ),
-					'per_view' => __( 'Cards visible at once: 1-5 (default 3)', 'pesa-donations' ),
-					'autoplay' => __( 'true / false (default false)', 'pesa-donations' ),
-					'interval' => __( 'Autoplay delay in ms (default 4500)', 'pesa-donations' ),
+					'limit'           => __( 'Max campaigns to include (default 10)', 'pesa-donations' ),
+					'per_view'        => __( 'Cards visible at once on desktop, > 960px wide: 1-5 (default 3)', 'pesa-donations' ),
+					'per_view_tablet' => __( 'Cards visible at once on tablet, 561-960px: 1-5 (default 2)', 'pesa-donations' ),
+					'per_view_mobile' => __( 'Cards visible at once on mobile, ≤ 560px: 1-5 (default 1)', 'pesa-donations' ),
+					'autoplay'        => __( 'true / false (default false)', 'pesa-donations' ),
+					'interval'        => __( 'Autoplay delay in ms (default 4500)', 'pesa-donations' ),
 				],
-				'example'     => '[pd_give_slider per_view="3" autoplay="false"]',
+				'example'     => '[pd_give_slider per_view="3" per_view_tablet="2" per_view_mobile="1"]',
 				'recommended' => __( 'Drop into a homepage section under the hero.', 'pesa-donations' ),
 			],
 			[
@@ -787,12 +792,12 @@ class Settings {
 			'pd_pesapal_consumer_secret', 'pd_paypal_environment', 'pd_paypal_client_id',
 			'pd_paypal_client_secret', 'pd_paypal_integration', 'pd_email_from_name',
 			'pd_email_from_address', 'pd_log_retention_days', 'pd_admin_alert_email',
-			'pd_terms_url',
+			'pd_lead_form_email', 'pd_terms_url',
 		];
 		$url_fields = [ 'pd_terms_url' ];
 		// Fields where embedded CRLF would be a header-injection vector when
-		// later used in `wp_mail` From: headers.
-		$strip_crlf_fields = [ 'pd_email_from_name', 'pd_email_from_address', 'pd_admin_alert_email' ];
+		// later used in `wp_mail` From:/To:/Reply-To: headers.
+		$strip_crlf_fields = [ 'pd_email_from_name', 'pd_email_from_address', 'pd_admin_alert_email', 'pd_lead_form_email' ];
 
 		foreach ( $fields as $field ) {
 			if ( ! isset( $_POST[ $field ] ) ) {

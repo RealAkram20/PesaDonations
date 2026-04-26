@@ -6,7 +6,7 @@ namespace PesaDonations\Core;
 class Installer {
 
 	private const DB_VERSION_OPTION = 'pd_db_version';
-	private const DB_VERSION        = '1.2.0';
+	private const DB_VERSION        = '1.3.0';
 
 	public static function install(): void {
 		self::create_tables();
@@ -16,11 +16,56 @@ class Installer {
 		update_option( self::DB_VERSION_OPTION, self::DB_VERSION );
 	}
 
+	/**
+	 * Lightweight schema-only upgrade run on every plugins_loaded.
+	 * Idempotent and cheap — version_compare short-circuits when up to
+	 * date. Only bumps the stored version after verifying the latest
+	 * sentinel column exists, so a silent dbDelta failure on a strict-
+	 * mode host won't lock us into a wrong-version state.
+	 */
 	public static function maybe_upgrade(): void {
 		$installed = get_option( self::DB_VERSION_OPTION, '0' );
-		if ( version_compare( $installed, self::DB_VERSION, '<' ) ) {
-			self::install();
+		if ( version_compare( $installed, self::DB_VERSION, '>=' ) ) {
+			return;
 		}
+
+		// Schema first. Pages / crons / defaults run only when we're in a
+		// context where they're safe (admin or activation). For schema
+		// upgrades on a front-end AJAX/IPN request, getting the columns
+		// in place is the whole point — we don't need to recreate pages.
+		self::create_tables();
+
+		if ( ! self::schema_is_current() ) {
+			// dbDelta may have silently failed (strict mode, lock wait,
+			// etc.). Don't bump the version — retry on next request.
+			return;
+		}
+
+		// Safe to run heavier setup only on admin context. Front-end
+		// upgrades just want the columns; pages/crons can wait for the
+		// next admin pageview.
+		if ( is_admin() || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+			self::create_pages();
+			self::schedule_crons();
+			self::set_defaults();
+		}
+
+		update_option( self::DB_VERSION_OPTION, self::DB_VERSION );
+	}
+
+	/**
+	 * Sentinel-column check: the latest migration adds donor_organization
+	 * to pd_donations. If it's there, dbDelta succeeded.
+	 */
+	private static function schema_is_current(): bool {
+		global $wpdb;
+		$col = $wpdb->get_var( $wpdb->prepare(
+			"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+			$wpdb->prefix . 'pd_donations',
+			'donor_organization'
+		) );
+		return ! empty( $col );
 	}
 
 	// -------------------------------------------------------------------------
@@ -41,6 +86,7 @@ class Installer {
 			phone VARCHAR(30) NULL,
 			first_name VARCHAR(100) NULL,
 			last_name VARCHAR(100) NULL,
+			organization VARCHAR(150) NULL,
 			country CHAR(2) NULL,
 			wants_updates TINYINT(1) NOT NULL DEFAULT 0,
 			total_donated_base DECIMAL(15,2) NOT NULL DEFAULT 0,
@@ -76,6 +122,7 @@ class Installer {
 			recurring_schedule_id BIGINT(20) UNSIGNED NULL,
 			is_anonymous TINYINT(1) NOT NULL DEFAULT 0,
 			donor_name VARCHAR(150) NULL,
+			donor_organization VARCHAR(150) NULL,
 			donor_email VARCHAR(150) NULL,
 			donor_phone VARCHAR(30) NULL,
 			donor_country CHAR(2) NULL,

@@ -35,20 +35,25 @@ class Admin_Menu {
 			[ $this, 'render_dashboard' ]
 		);
 
+		// Donations (project-type campaigns) — fundraisers for causes.
+		// "Add New" intentionally NOT in the submenu — the list page's
+		// page-title-action button covers that, and the submenu used to
+		// duplicate it.
 		add_submenu_page(
 			'pesa-donations',
-			__( 'Campaigns', 'pesa-donations' ),
-			__( 'Campaigns', 'pesa-donations' ),
+			__( 'Donations', 'pesa-donations' ),
+			__( 'Donations', 'pesa-donations' ),
 			'manage_options',
-			'edit.php?post_type=' . Campaign_CPT::POST_TYPE
+			'edit.php?post_type=' . Campaign_CPT::POST_TYPE . '&pd_category=project'
 		);
 
+		// Sponsorships (sponsorship-type campaigns) — individual beneficiaries.
 		add_submenu_page(
 			'pesa-donations',
-			__( 'Add New Campaign', 'pesa-donations' ),
-			__( 'Add New', 'pesa-donations' ),
+			__( 'Sponsorships', 'pesa-donations' ),
+			__( 'Sponsorships', 'pesa-donations' ),
 			'manage_options',
-			'post-new.php?post_type=' . Campaign_CPT::POST_TYPE
+			'edit.php?post_type=' . Campaign_CPT::POST_TYPE . '&pd_category=sponsorship'
 		);
 
 		add_submenu_page(
@@ -60,19 +65,18 @@ class Admin_Menu {
 			[ $this, 'render_donations' ]
 		);
 
+		// Hidden (parent_slug = '') — page stays reachable so the "Add New"
+		// page-title-action button on the All Donations list keeps working.
+		// Empty parent slug instead of null: null is deprecated in PHP 8.1+
+		// and emits notices that can break header output.
 		add_submenu_page(
-			'pesa-donations',
+			'',
 			__( 'Add New Donation', 'pesa-donations' ),
-			__( 'Add New', 'pesa-donations' ),
+			__( 'Add New Donation', 'pesa-donations' ),
 			'manage_options',
 			'pd-donation-new',
 			[ $this, 'render_donation_editor' ]
 		);
-
-		// Hidden (not in menu) — for edit donation screen.
-		// Empty parent slug instead of null: passing null is deprecated in
-		// PHP 8.1+ (add_submenu_page expects string) and emits notices that
-		// can break header output on hosts with display_errors=on.
 		add_submenu_page(
 			'',
 			__( 'Edit Donation', 'pesa-donations' ),
@@ -91,16 +95,15 @@ class Admin_Menu {
 			[ $this, 'render_donors' ]
 		);
 
+		// Hidden — page-title-action on the donors list links here.
 		add_submenu_page(
-			'pesa-donations',
+			'',
 			__( 'Add New Donor', 'pesa-donations' ),
 			__( 'Add New Donor', 'pesa-donations' ),
 			'manage_options',
 			'pd-donor-new',
 			[ $this, 'render_donor_editor' ]
 		);
-
-		// Hidden — edit donor screen.
 		add_submenu_page(
 			'',
 			__( 'Edit Donor', 'pesa-donations' ),
@@ -205,7 +208,10 @@ class Admin_Menu {
 
 		$total_donations = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->prefix}pd_donations WHERE status = 'completed'" );
 		$total_raised    = (float) $wpdb->get_var( "SELECT SUM(amount_base) FROM {$wpdb->prefix}pd_donations WHERE status = 'completed'" );
-		$total_campaigns = (int) wp_count_posts( 'pd_campaign' )->publish;
+		// wp_count_posts can return false (PTR re-registration race, etc.).
+		// Calling ->publish on bool is a fatal on PHP 8.1+.
+		$counts          = wp_count_posts( 'pd_campaign' );
+		$total_campaigns = (int) ( is_object( $counts ) ? ( $counts->publish ?? 0 ) : 0 );
 		$total_donors    = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$wpdb->prefix}pd_donors" );
 
 		$cards = [

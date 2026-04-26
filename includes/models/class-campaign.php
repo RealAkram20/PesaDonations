@@ -127,24 +127,75 @@ class Campaign {
 		return (string) $this->meta( '_pd_beneficiary_code' );
 	}
 
+	/**
+	 * Sponsorship plans — named percentage tiers of the campaign goal.
+	 * Returns an array of items shaped:
+	 *     [ 'name' => 'Standard', 'percent' => 5, 'amount' => 50000.0, 'currency' => 'UGX' ]
+	 * `amount` is computed at read time from the current goal so changing
+	 * the goal automatically rescales every tier. Returns [] when the
+	 * campaign has no goal set, since percentages are meaningless then.
+	 */
 	public function get_sponsorship_plans(): array {
-		$plans = $this->meta( '_pd_sponsorship_plans' );
-		if ( is_string( $plans ) ) {
-			$plans = json_decode( $plans, true );
+		$goal = $this->get_goal_amount();
+		if ( $goal <= 0 ) {
+			return [];
 		}
-		return is_array( $plans ) ? $plans : [];
+		$base  = $this->get_base_currency();
+		$plans = \PesaDonations\Admin\Meta_Boxes::read_sponsorship_plans( $this->post->ID );
+		$out   = [];
+		foreach ( $plans as $p ) {
+			$out[] = [
+				'name'     => $p['name'],
+				'percent'  => $p['percent'],
+				'amount'   => round( $goal * ( $p['percent'] / 100 ), 2 ),
+				'currency' => $base,
+			];
+		}
+		return $out;
 	}
 
+	/**
+	 * Suggested donation amounts — percentages of the campaign goal.
+	 * Returns an array of items shaped:
+	 *     [ 'percent' => 5, 'amount' => 50000.0, 'currency' => 'UGX' ]
+	 * Returns [] when the campaign has no goal — donor still has the
+	 * custom-amount field, just no scale-anchored suggestions.
+	 */
 	public function get_suggested_amounts(): array {
-		$amounts = $this->meta( '_pd_suggested_amounts' );
-		if ( is_string( $amounts ) ) {
-			$amounts = json_decode( $amounts, true );
+		$goal = $this->get_goal_amount();
+		if ( $goal <= 0 ) {
+			return [];
 		}
-		return is_array( $amounts ) ? $amounts : [];
+		$base     = $this->get_base_currency();
+		$percents = \PesaDonations\Admin\Meta_Boxes::read_suggested_percents( $this->post->ID );
+		$out      = [];
+		foreach ( $percents as $pct ) {
+			$out[] = [
+				'percent'  => $pct,
+				'amount'   => round( $goal * ( $pct / 100 ), 2 ),
+				'currency' => $base,
+			];
+		}
+		return $out;
 	}
 
 	public function get_minimum_amount(): float {
 		return (float) ( $this->meta( '_pd_minimum_amount' ) ?: get_option( 'pd_minimum_amount_ugx', 5000 ) );
+	}
+
+	/**
+	 * Newline-separated "main goals" entered in the campaign meta box.
+	 * Returned as a clean array of strings, empty entries dropped.
+	 *
+	 * @return string[]
+	 */
+	public function get_main_goals(): array {
+		$raw = (string) $this->meta( '_pd_main_goals' );
+		if ( '' === $raw ) {
+			return [];
+		}
+		$lines = preg_split( '/\r\n|\r|\n/', $raw );
+		return array_values( array_filter( array_map( 'trim', $lines ) ) );
 	}
 
 	public function allows_recurring(): bool {

@@ -42,19 +42,20 @@ class Donation_Editor {
 
 	private function defaults(): array {
 		return [
-			'id'                => 0,
+			'id'                 => 0,
 			'merchant_reference' => '',
-			'campaign_id'       => 0,
-			'amount'            => 0,
-			'currency'          => get_option( 'pd_default_currency', 'UGX' ),
-			'gateway'           => 'manual',
-			'status'            => 'completed',
-			'donor_name'        => '',
-			'donor_email'       => '',
-			'donor_phone'       => '',
-			'donor_country'     => '',
-			'message'           => '',
-			'created_at'        => current_time( 'mysql' ),
+			'campaign_id'        => 0,
+			'amount'             => 0,
+			'currency'           => get_option( 'pd_default_currency', 'UGX' ),
+			'gateway'            => 'manual',
+			'status'             => 'completed',
+			'donor_name'         => '',
+			'donor_organization' => '',
+			'donor_email'        => '',
+			'donor_phone'        => '',
+			'donor_country'      => '',
+			'message'            => '',
+			'created_at'         => current_time( 'mysql' ),
 		];
 	}
 
@@ -200,6 +201,14 @@ class Donation_Editor {
 									</tr>
 
 									<tr>
+										<th><label><?php esc_html_e( 'Organization', 'pesa-donations' ); ?></label></th>
+										<td>
+											<input type="text" name="donor_organization" value="<?php echo esc_attr( (string) ( $data['donor_organization'] ?? '' ) ); ?>" class="regular-text"
+											       placeholder="<?php esc_attr_e( '(individual donor)', 'pesa-donations' ); ?>" />
+										</td>
+									</tr>
+
+									<tr>
 										<th><label><?php esc_html_e( 'Email', 'pesa-donations' ); ?></label></th>
 										<td><input type="email" name="donor_email" value="<?php echo esc_attr( $data['donor_email'] ); ?>" class="regular-text" /></td>
 									</tr>
@@ -296,19 +305,20 @@ class Donation_Editor {
 		$created     = $ts ? gmdate( 'Y-m-d H:i:s', $ts ) : current_time( 'mysql' );
 
 		$data = [
-			'campaign_id'       => $campaign_id,
-			'donor_id'          => $donor_id,
-			'amount'            => $amount,
-			'currency'          => $currency,
-			'amount_base'       => $amount,
-			'gateway'           => sanitize_key( wp_unslash( $_POST['gateway'] ?? 'manual' ) ),
-			'status'            => $status,
-			'donor_name'        => sanitize_text_field( wp_unslash( $_POST['donor_name'] ?? '' ) ),
-			'donor_email'       => $email,
-			'donor_phone'       => $phone,
-			'donor_country'     => sanitize_text_field( wp_unslash( $_POST['donor_country'] ?? '' ) ),
-			'message'           => sanitize_textarea_field( wp_unslash( $_POST['message'] ?? '' ) ),
-			'created_at'        => $created,
+			'campaign_id'        => $campaign_id,
+			'donor_id'           => $donor_id,
+			'amount'             => $amount,
+			'currency'           => $currency,
+			'amount_base'        => $amount,
+			'gateway'            => sanitize_key( wp_unslash( $_POST['gateway'] ?? 'manual' ) ),
+			'status'             => $status,
+			'donor_name'         => sanitize_text_field( wp_unslash( $_POST['donor_name'] ?? '' ) ),
+			'donor_organization' => sanitize_text_field( wp_unslash( $_POST['donor_organization'] ?? '' ) ),
+			'donor_email'        => $email,
+			'donor_phone'        => $phone,
+			'donor_country'      => sanitize_text_field( wp_unslash( $_POST['donor_country'] ?? '' ) ),
+			'message'            => sanitize_textarea_field( wp_unslash( $_POST['message'] ?? '' ) ),
+			'created_at'         => $created,
 		];
 
 		if ( 'completed' === $status ) {

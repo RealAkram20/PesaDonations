@@ -147,10 +147,11 @@ $config = wp_json_encode( [
 				<?php foreach ( $plans as $plan ) :
 					$plan_currency = ! empty( $plan['currency'] ) ? strtoupper( $plan['currency'] ) : $currency;
 					$plan_payload  = array_merge( $plan, [ 'currency' => $plan_currency ] );
-					$label         = number_format( (float) $plan['amount'] ) . ' ' . $plan_currency;
-					if ( ! empty( $plan['name'] ) ) {
-						$label .= ' (' . $plan['name'] . ')';
-					}
+					// Label shape: "Standard — 50,000 UGX". Percent is the
+					// admin's configuration knob; donors only need to see
+					// the price they'd be paying for the named tier.
+					$label = ( ! empty( $plan['name'] ) ? $plan['name'] . ' — ' : '' )
+						. number_format( (float) $plan['amount'] ) . ' ' . $plan_currency;
 				?>
 					<button type="button"
 					        class="pd-plan-btn"
@@ -187,12 +188,15 @@ $config = wp_json_encode( [
 			<h3 class="pd-checkout__section-title"><?php esc_html_e( 'Donation Amount', 'pesa-donations' ); ?></h3>
 			<?php if ( $campaign->get_suggested_amounts() ) : ?>
 				<div class="pd-amount-buttons">
-					<?php foreach ( $campaign->get_suggested_amounts() as $sug ) : ?>
+					<?php foreach ( $campaign->get_suggested_amounts() as $sug ) :
+						$sug_currency = $sug['currency'] ?? $currency;
+						$label        = number_format( (float) $sug['amount'] ) . ' ' . $sug_currency;
+					?>
 						<button type="button"
 						        class="pd-amount-btn"
 						        :class="{ 'pd-amount-btn--active': formData.amount == <?php echo esc_js( $sug['amount'] ); ?> }"
 						        @click="formData.amount = <?php echo esc_js( $sug['amount'] ); ?>">
-							<?php echo esc_html( number_format( (float) $sug['amount'] ) . ' ' . ( $sug['currency'] ?? $currency ) ); ?>
+							<?php echo esc_html( $label ); ?>
 						</button>
 					<?php endforeach; ?>
 				</div>
@@ -224,16 +228,35 @@ $config = wp_json_encode( [
 			<span class="pd-toggle__label"><?php esc_html_e( 'This is an organization or group', 'pesa-donations' ); ?></span>
 		</div>
 
+		<!-- Organization name — only when the org toggle is on. The donor's
+		     personal name fields below become the contact-person fields. -->
+		<div class="pd-form-field pd-form-field--org" x-show="isOrg" x-cloak style="display:none;">
+			<label class="pd-label"><?php esc_html_e( 'Organization Name', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+			<input type="text" x-model="formData.org_name" class="pd-input"
+			       :class="{ 'pd-input--error': errors.org_name }"
+			       autocomplete="organization"
+			       placeholder="<?php esc_attr_e( 'e.g. Acme Foundation', 'pesa-donations' ); ?>" />
+			<p class="pd-error-msg" x-show="errors.org_name" x-text="errors.org_name"></p>
+		</div>
+
 		<div class="pd-form-row pd-form-row--2col">
 			<div class="pd-form-field">
-				<label class="pd-label"><?php esc_html_e( 'First Name', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+				<label class="pd-label">
+					<span x-show="!isOrg"><?php esc_html_e( 'First Name', 'pesa-donations' ); ?></span>
+					<span x-show="isOrg" x-cloak style="display:none;"><?php esc_html_e( 'Contact First Name', 'pesa-donations' ); ?></span>
+					<span class="pd-required">*</span>
+				</label>
 				<input type="text" x-model="formData.first_name" class="pd-input"
 				       :class="{ 'pd-input--error': errors.first_name }"
 				       autocomplete="given-name" />
 				<p class="pd-error-msg" x-show="errors.first_name" x-text="errors.first_name"></p>
 			</div>
 			<div class="pd-form-field">
-				<label class="pd-label"><?php esc_html_e( 'Last Name', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+				<label class="pd-label">
+					<span x-show="!isOrg"><?php esc_html_e( 'Last Name', 'pesa-donations' ); ?></span>
+					<span x-show="isOrg" x-cloak style="display:none;"><?php esc_html_e( 'Contact Last Name', 'pesa-donations' ); ?></span>
+					<span class="pd-required">*</span>
+				</label>
 				<input type="text" x-model="formData.last_name" class="pd-input"
 				       :class="{ 'pd-input--error': errors.last_name }"
 				       autocomplete="family-name" />

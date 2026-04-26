@@ -240,49 +240,75 @@ class Shortcodes {
 	}
 
 	private function render_project_card( Campaign $c ): void {
-		$data     = wp_json_encode( $c->to_json_array() );
-		$has_goal = $c->show_progress_bar() && $c->get_goal_amount() > 0;
+		$has_goal  = $c->show_progress_bar() && $c->get_goal_amount() > 0;
+		$goal      = $c->get_goal_amount();
+		$raised    = $c->get_raised_amount();
+		$remaining = max( 0, $goal - $raised );
+		$progress  = $goal > 0 ? min( 100, (int) round( ( $raised / $goal ) * 100 ) ) : 0;
+		$end       = (string) get_post_meta( $c->get_id(), '_pd_end_date', true );
+		$expire    = '';
+		if ( $end ) {
+			$ts = strtotime( $end );
+			if ( $ts ) {
+				$expire = gmdate( 'j M, Y', $ts );
+			}
+		}
+		$permalink = get_permalink( $c->get_id() ) ?: '';
 		?>
-		<article class="pd-card pd-card--project">
-			<div class="pd-card__media">
+		<article class="pd-donation-card">
+			<div class="pd-donation-card__media">
 				<?php if ( $c->get_thumbnail_url( 'medium_large' ) ) : ?>
 					<img src="<?php echo esc_url( $c->get_thumbnail_url( 'medium_large' ) ); ?>"
 					     alt="<?php echo esc_attr( $c->get_title() ); ?>"
-					     class="pd-card__image"
+					     class="pd-donation-card__image"
 					     loading="lazy" />
 				<?php else : ?>
-					<div class="pd-card__image pd-card__image--placeholder"></div>
+					<div class="pd-donation-card__image pd-donation-card__image--placeholder"></div>
 				<?php endif; ?>
-				<span class="pd-tag pd-tag--project"><?php esc_html_e( 'Project', 'pesa-donations' ); ?></span>
+				<?php if ( $has_goal ) : ?>
+					<span class="pd-donation-card__badge">
+						<?php esc_html_e( 'Raised Funds', 'pesa-donations' ); ?>
+						<span class="pd-donation-card__badge-pct"><?php echo esc_html( $progress . '%' ); ?></span>
+					</span>
+				<?php endif; ?>
 			</div>
 
-			<div class="pd-card__body">
-				<?php if ( $has_goal ) : ?>
-					<?php $this->render_stripe_progress( $c ); ?>
-					<p class="pd-card__raised">
-						<span class="pd-raised"><?php echo esc_html( number_format( $c->get_raised_amount() ) ); ?></span>
-						<span class="pd-card__raised-label">
-							<?php esc_html_e( 'Raised of', 'pesa-donations' ); ?>
-							<span class="pd-goal"><?php echo esc_html( number_format( $c->get_goal_amount() ) ); ?></span>
-						</span>
-					</p>
-				<?php endif; ?>
-
-				<h3 class="pd-card__title"><?php echo esc_html( $c->get_title() ); ?></h3>
+			<div class="pd-donation-card__body">
+				<h3 class="pd-donation-card__title"><?php echo esc_html( $c->get_title() ); ?></h3>
 
 				<?php if ( $c->get_excerpt() ) : ?>
-					<p class="pd-card__excerpt"><?php echo esc_html( wp_trim_words( $c->get_excerpt(), 11 ) ); ?></p>
+					<p class="pd-donation-card__excerpt"><?php echo esc_html( wp_trim_words( $c->get_excerpt(), 18 ) ); ?></p>
 				<?php endif; ?>
 
-				<div class="pd-card__actions">
-					<button type="button" class="pd-btn pd-btn--outline"
-					        @click="openDetails(<?php echo esc_attr( $data ); ?>)">
-						<?php esc_html_e( 'View Details', 'pesa-donations' ); ?>
-					</button>
+				<div class="pd-donation-card__actions">
 					<a href="<?php echo esc_url( $c->get_checkout_url() ); ?>" class="pd-btn pd-btn--primary">
-						<?php esc_html_e( 'Donate Now', 'pesa-donations' ); ?>
+						<?php esc_html_e( 'Donate Fund', 'pesa-donations' ); ?>
+					</a>
+					<a href="<?php echo esc_url( $permalink ); ?>" class="pd-btn pd-btn--outline">
+						<?php esc_html_e( 'View Details', 'pesa-donations' ); ?>
 					</a>
 				</div>
+
+				<?php if ( $has_goal || $expire ) : ?>
+				<dl class="pd-donation-card__stats">
+					<?php if ( $has_goal ) : ?>
+						<div class="pd-donation-card__stat">
+							<dt><?php esc_html_e( 'Raised Fund', 'pesa-donations' ); ?></dt>
+							<dd><?php echo esc_html( number_format( $raised ) ); ?></dd>
+						</div>
+						<div class="pd-donation-card__stat">
+							<dt><?php esc_html_e( 'Remaining', 'pesa-donations' ); ?></dt>
+							<dd><?php echo esc_html( number_format( $remaining ) ); ?></dd>
+						</div>
+					<?php endif; ?>
+					<?php if ( $expire ) : ?>
+						<div class="pd-donation-card__stat">
+							<dt><?php esc_html_e( 'Expire Date', 'pesa-donations' ); ?></dt>
+							<dd><?php echo esc_html( $expire ); ?></dd>
+						</div>
+					<?php endif; ?>
+				</dl>
+				<?php endif; ?>
 			</div>
 		</article>
 		<?php
@@ -325,8 +351,11 @@ class Shortcodes {
 			];
 		}
 
+		// Hard cap at 500 to prevent OOM on huge campaign tables. The
+		// browse UI's pagination + search keeps every campaign reachable;
+		// shipping all 5000 in one HTML attribute would crash PHP.
 		$campaigns = $this->query_campaigns( [
-			'posts_per_page' => -1,
+			'posts_per_page' => (int) apply_filters( 'pd_browse_max_campaigns', 500 ),
 			'orderby'        => 'date',
 			'meta_query'     => $meta_query,
 		] );
@@ -370,6 +399,25 @@ class Shortcodes {
 			$row['tag_label']     = $row['is_sponsorship'] ? __( 'Sponsorship', 'pesa-donations' ) : __( 'Project', 'pesa-donations' );
 			$row['tag_class']     = $row['is_sponsorship'] ? 'pd-tag pd-tag--sponsorship' : 'pd-tag pd-tag--project';
 			$row['card_class']    = $row['is_sponsorship'] ? 'pd-card pd-card--sponsorship' : 'pd-card pd-card--project';
+
+			// Donation-card stats: pre-computed so the Alpine template can
+			// render a 3-column footer (Raised Fund / Remaining / Expire).
+			$goal              = (float) $row['goal'];
+			$raised            = (float) $row['raised'];
+			$remaining         = max( 0, $goal - $raised );
+			$row['remaining']     = $remaining;
+			$row['remaining_fmt'] = number_format( $remaining );
+			$row['progress_pct']  = $goal > 0 ? min( 100, (int) round( ( $raised / $goal ) * 100 ) ) : 0;
+			$end_raw              = (string) get_post_meta( $row['id'], '_pd_end_date', true );
+			$row['expire_raw']    = $end_raw;
+			$row['expire_fmt']    = '';
+			if ( $end_raw ) {
+				$ts = strtotime( $end_raw );
+				if ( $ts ) {
+					$row['expire_fmt'] = gmdate( 'j M, Y', $ts );
+				}
+			}
+			$row['permalink']     = get_permalink( (int) $row['id'] ) ?: '';
 			return $row;
 		}, $campaigns );
 
@@ -561,6 +609,50 @@ class Shortcodes {
 				<div class="pd-grid"
 				     :class="'pd-grid--' + columns + 'col'"
 				     x-show="showGrid" x-cloak>
+					<?php if ( 'project' === $type ) : ?>
+					<template x-for="c in paginated" :key="c.id">
+						<article class="pd-donation-card">
+							<div class="pd-donation-card__media">
+								<img :src="c.thumbnail" :alt="c.display_title"
+								     class="pd-donation-card__image" loading="lazy"
+								     x-show="c.thumbnail" />
+								<div class="pd-donation-card__image pd-donation-card__image--placeholder" x-show="!c.thumbnail"></div>
+								<span class="pd-donation-card__badge" x-show="c.has_progress">
+									<?php esc_html_e( 'Raised Funds', 'pesa-donations' ); ?>
+									<span class="pd-donation-card__badge-pct" x-text="c.progress_pct + '%'"></span>
+								</span>
+							</div>
+							<div class="pd-donation-card__body">
+								<h3 class="pd-donation-card__title" x-text="c.display_title"></h3>
+								<p class="pd-donation-card__excerpt"
+								   x-show="c.short_excerpt"
+								   x-text="c.short_excerpt"></p>
+								<div class="pd-donation-card__actions">
+									<a :href="c.checkout_url" class="pd-btn pd-btn--primary">
+										<?php esc_html_e( 'Donate Fund', 'pesa-donations' ); ?>
+									</a>
+									<a :href="c.permalink" class="pd-btn pd-btn--outline">
+										<?php esc_html_e( 'View Details', 'pesa-donations' ); ?>
+									</a>
+								</div>
+								<dl class="pd-donation-card__stats">
+									<div class="pd-donation-card__stat" x-show="c.has_progress">
+										<dt><?php esc_html_e( 'Raised Fund', 'pesa-donations' ); ?></dt>
+										<dd x-text="c.raised_fmt"></dd>
+									</div>
+									<div class="pd-donation-card__stat" x-show="c.has_progress">
+										<dt><?php esc_html_e( 'Remaining', 'pesa-donations' ); ?></dt>
+										<dd x-text="c.remaining_fmt"></dd>
+									</div>
+									<div class="pd-donation-card__stat" x-show="c.expire_fmt">
+										<dt><?php esc_html_e( 'Expire Date', 'pesa-donations' ); ?></dt>
+										<dd x-text="c.expire_fmt"></dd>
+									</div>
+								</dl>
+							</div>
+						</article>
+					</template>
+					<?php else : ?>
 					<template x-for="c in paginated" :key="c.id">
 						<article :class="c.card_class">
 							<div class="pd-card__media">
@@ -607,6 +699,7 @@ class Shortcodes {
 							</div>
 						</article>
 					</template>
+					<?php endif; ?>
 				</div>
 
 				<div class="pd-list"
@@ -681,10 +774,12 @@ class Shortcodes {
 
 	private function render_slider( string $type, array $atts, string $tag ): string {
 		$atts = shortcode_atts( [
-			'limit'    => 10,
-			'per_view' => 3,
-			'autoplay' => 'false',
-			'interval' => 4500,
+			'limit'           => 10,
+			'per_view'        => 3,  // desktop (>960px)
+			'per_view_tablet' => 2,  // 561-960px
+			'per_view_mobile' => 1,  // <=560px
+			'autoplay'        => 'false',
+			'interval'        => 4500,
 		], $atts, $tag );
 
 		$meta_query = 'sponsorship' === $type
@@ -707,12 +802,22 @@ class Shortcodes {
 			'interval' => (int) $atts['interval'],
 		] );
 
-		$per_view = max( 1, min( 5, (int) $atts['per_view'] ) );
+		$pv_desktop = max( 1, min( 5, (int) $atts['per_view'] ) );
+		$pv_tablet  = max( 1, min( 5, (int) $atts['per_view_tablet'] ) );
+		$pv_mobile  = max( 1, min( 5, (int) $atts['per_view_mobile'] ) );
+
+		// Three CSS variables, one per breakpoint. The CSS reads the
+		// right one inside its @media blocks, so the admin can fully
+		// control the slide count on every screen size.
+		$slider_style = sprintf(
+			'--pd-slider-pv-desktop:%d;--pd-slider-pv-tablet:%d;--pd-slider-pv-mobile:%d;',
+			$pv_desktop, $pv_tablet, $pv_mobile
+		);
 
 		ob_start();
 		?>
 		<div class="pd-slider pd-slider--<?php echo esc_attr( $type ); ?>"
-		     style="--pd-slider-per-view: <?php echo esc_attr( (string) $per_view ); ?>;"
+		     style="<?php echo esc_attr( $slider_style ); ?>"
 		     x-data="pdSlider(<?php echo esc_attr( $config ); ?>, <?php echo esc_attr( $json_data ); ?>)"
 		     x-init="init()"
 		     @mouseenter="pauseAutoplay()"

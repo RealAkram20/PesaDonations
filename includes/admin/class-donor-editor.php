@@ -50,6 +50,7 @@ class Donor_Editor {
 			'phone'              => '',
 			'first_name'         => '',
 			'last_name'          => '',
+			'organization'       => '',
 			'country'            => '',
 			'wants_updates'      => 0,
 			'total_donated_base' => 0,
@@ -94,10 +95,14 @@ class Donor_Editor {
 			</a>
 			<hr class="wp-header-end" />
 
-			<?php if ( isset( $_GET['pd_msg'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
+			<?php
+				// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+				$pd_msg = isset( $_GET['pd_msg'] ) ? sanitize_key( wp_unslash( (string) $_GET['pd_msg'] ) ) : '';
+			?>
+			<?php if ( $pd_msg ) : ?>
 				<div class="notice notice-success is-dismissible">
 					<p><?php
-						echo 'created' === $_GET['pd_msg']
+						echo 'created' === $pd_msg
 							? esc_html__( 'Donor created.', 'pesa-donations' )
 							: esc_html__( 'Donor saved.', 'pesa-donations' );
 					?></p>
@@ -132,6 +137,13 @@ class Donor_Editor {
 									<tr>
 										<th><label for="pd_phone"><?php esc_html_e( 'Phone', 'pesa-donations' ); ?></label></th>
 										<td><input type="text" name="phone" id="pd_phone" value="<?php echo esc_attr( $data['phone'] ); ?>" class="regular-text" /></td>
+									</tr>
+									<tr>
+										<th><label for="pd_organization"><?php esc_html_e( 'Organization', 'pesa-donations' ); ?></label></th>
+										<td>
+											<input type="text" name="organization" id="pd_organization" value="<?php echo esc_attr( (string) ( $data['organization'] ?? '' ) ); ?>" class="regular-text" />
+											<p class="description"><?php esc_html_e( 'If the donor gave on behalf of a company / NGO / group, the organization name appears here.', 'pesa-donations' ); ?></p>
+										</td>
 									</tr>
 									<tr>
 										<th><label for="pd_country"><?php esc_html_e( 'Country', 'pesa-donations' ); ?></label></th>
@@ -268,6 +280,7 @@ class Donor_Editor {
 			'email'         => $email,
 			'first_name'    => sanitize_text_field( wp_unslash( $_POST['first_name'] ?? '' ) ),
 			'last_name'     => sanitize_text_field( wp_unslash( $_POST['last_name'] ?? '' ) ),
+			'organization'  => sanitize_text_field( wp_unslash( $_POST['organization'] ?? '' ) ),
 			'phone'         => sanitize_text_field( wp_unslash( $_POST['phone'] ?? '' ) ),
 			'country'       => strtoupper( sanitize_text_field( wp_unslash( $_POST['country'] ?? '' ) ) ),
 			// Admin can toggle this freely (unlike the public form's
@@ -284,14 +297,30 @@ class Donor_Editor {
 			return $id;
 		}
 
-		// New-donor flow: a row with this email may already exist (form
-		// reused, or imported earlier). Treat it as an UPDATE on the
-		// existing donor instead of silently dropping the typed first/last
-		// name / phone / country, which is what previous versions did.
-		$existing = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE email = %s", $email ) );
+		// New-donor flow: refuse if email already belongs to another donor.
+		// Previously we'd silently overwrite that donor's name/country/
+		// subscription preference, which destroys data when an admin
+		// autocompletes a familiar email by mistake. Surface a notice and
+		// link to the existing record instead.
+		$existing = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$table} WHERE email = %s", $email ) );
 		if ( $existing ) {
-			$wpdb->update( $table, $data, [ 'id' => (int) $existing ] );
-			return (int) $existing;
+			$edit_url = add_query_arg(
+				[ 'page' => 'pd-donor-edit', 'id' => $existing ],
+				admin_url( 'admin.php' )
+			);
+			add_action( 'admin_notices', static function () use ( $email, $edit_url ): void {
+				printf(
+					'<div class="notice notice-error"><p>%s <a href="%s">%s</a></p></div>',
+					esc_html( sprintf(
+						/* translators: %s: donor email */
+						__( 'A donor with the email %s already exists.', 'pesa-donations' ),
+						$email
+					) ),
+					esc_url( $edit_url ),
+					esc_html__( 'Open existing record', 'pesa-donations' )
+				);
+			} );
+			return null;
 		}
 
 		$data['created_at'] = current_time( 'mysql' );
