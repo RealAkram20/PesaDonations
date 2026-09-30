@@ -6,3 +6,4 @@
 *.log
 wp-config.php
 includes/vendor/maxmind-db-reader/data/
+graphify-out/

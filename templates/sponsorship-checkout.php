@@ -14,52 +14,89 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-/** @var \PesaDonations\Models\Campaign $campaign */
+/** @var \PesaDonations\Models\Campaign|null $campaign Null for an open donation (see donation-form.php). */
 
-$is_sponsorship_type = 'child' === $campaign->get_category();
-$plans               = $campaign->get_sponsorship_plans();
-$has_plans           = ! empty( $plans ) && $is_sponsorship_type;
-$currency            = $campaign->get_base_currency();
-$referrals           = (array) get_option( 'pd_referral_sources', [] );
-$nonce               = wp_create_nonce( 'pd_public_nonce' );
-$checkout_id         = esc_attr( 'pd-checkout-' . $campaign->get_id() );
+use PesaDonations\Models\Open_Donation;
+use PesaDonations\Utils\Countries;
 
-$config = wp_json_encode( [
-	'campaignId'   => $campaign->get_id(),
-	'currency'     => $currency,
-	'plans'        => $has_plans ? $plans : [],
-	'hasPlans'     => $has_plans,
-	'minAmount'    => $campaign->get_minimum_amount(),
-	'requireAddr'  => $campaign->checkout_requires_address(),
-	'nonce'        => $nonce,
-	'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
-	'thankYouUrl'  => get_permalink( (int) get_option( 'pd_thank_you_page_id' ) ) ?: '',
-] );
+$is_open             = null === $campaign;
+$is_sponsorship_type = ! $is_open && $campaign->is_sponsorship();
+$plans               = $is_open ? [] : $campaign->get_sponsorship_plans();
+// Plan tiers have not shown since the category "child" became "sponsorship"
+// (this compared against "child"), and every sponsorship saved since carries
+// the editor's default tiers. Showing them again changes what donors see, so
+// it is opt-in: add_filter( 'pd_checkout_show_plans', '__return_true' ).
+$has_plans           = ! empty( $plans ) && $is_sponsorship_type
+	&& apply_filters( 'pd_checkout_show_plans', false, $campaign );
+$currency            = $is_open ? Open_Donation::currency() : $campaign->get_base_currency();
+$min_amount          = $is_open ? Open_Donation::min_amount() : $campaign->get_minimum_amount();
+$require_address     = ! $is_open && $campaign->checkout_requires_address();
+$allow_anonymous     = ! $is_open && $campaign->allows_anonymous();
+$suggested_amounts   = $is_open ? ( $suggested ?? [] ) : $campaign->get_suggested_amounts();
+$current_period      = $is_open ? null : $campaign->get_current_period();
+$referrals           = array_filter( array_map( 'strval', (array) get_option( 'pd_referral_sources', [] ) ) );
+$checkout_id         = 'pd-checkout-' . ( $is_open ? 'open' : $campaign->get_id() );
+$field_id            = static fn( string $name ): string => esc_attr( $checkout_id . '-' . $name );
+
+$config = [
+	'campaignId'     => $is_open ? Open_Donation::CAMPAIGN_ID : $campaign->get_id(),
+	'currency'       => $currency,
+	'plans'          => $has_plans ? $plans : [],
+	'hasPlans'       => $has_plans,
+	'minAmount'      => $min_amount,
+	'requireAddr'    => $require_address,
+	'nonce'          => wp_create_nonce( 'pd_public_nonce' ),
+	'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
+	'thankYouUrl'    => get_permalink( (int) get_option( 'pd_thank_you_page_id' ) ) ?: '',
+	'i18n'           => [
+		/* translators: %s: minimum amount with currency, e.g. "5,000 UGX" */
+		'minimum'    => __( 'Minimum donation is %s.', 'pesa-donations' ),
+		'amount'     => __( 'Enter the amount as a number, for example 50000.', 'pesa-donations' ),
+		'firstName'  => __( 'First name is required.', 'pesa-donations' ),
+		'lastName'   => __( 'Last name is required.', 'pesa-donations' ),
+		'email'      => __( 'A valid email address is required.', 'pesa-donations' ),
+		'emailMatch' => __( 'Email addresses do not match.', 'pesa-donations' ),
+		'country'    => __( 'Country is required.', 'pesa-donations' ),
+		'address'    => __( 'Address is required.', 'pesa-donations' ),
+		'city'       => __( 'City is required.', 'pesa-donations' ),
+		'zip'        => __( 'Zip/Postal code is required.', 'pesa-donations' ),
+		'terms'      => __( 'You must agree to the terms to continue.', 'pesa-donations' ),
+		'fix'        => __( 'Please check the highlighted fields.', 'pesa-donations' ),
+		'generic'    => __( 'Something went wrong. Please try again.', 'pesa-donations' ),
+		'network'    => __( 'Network error. Please check your connection and try again.', 'pesa-donations' ),
+	],
+];
 ?>
 
-<div class="pd-checkout" id="<?php echo $checkout_id; ?>"
-     x-data="pdCheckout(<?php echo esc_attr( $config ); ?>)"
-     x-init="init()">
+<div class="pd-checkout" id="<?php echo esc_attr( $checkout_id ); ?>"
+     x-data="pdCheckout(<?php echo esc_attr( (string) wp_json_encode( $config ) ); ?>)">
+
+	<?php $is_sponsorship = $is_sponsorship_type; ?>
+
+	<?php if ( $is_open ) : ?>
+	<div class="pd-checkout__hero pd-checkout__hero--open">
+		<h2 class="pd-checkout__open-title"><?php echo esc_html( $open_title ?? Open_Donation::title() ); ?></h2>
+		<?php if ( ! empty( $open_intro ) ) : ?>
+			<p class="pd-checkout__open-intro"><?php echo esc_html( $open_intro ); ?></p>
+		<?php endif; ?>
+	</div>
+	<?php else : ?>
 
 	<?php
-	$is_sponsorship = 'child' === $campaign->get_category();
 	$hero_title     = $is_sponsorship
 		? ( $campaign->get_beneficiary_name() ?: $campaign->get_title() )
 		: $campaign->get_title();
-	$hero_label     = $is_sponsorship
-		? __( 'Thank you for choosing to sponsor:', 'pesa-donations' )
-		: __( 'You are donating to:', 'pesa-donations' );
-	?>
 
-	<?php
 	// Split name into first + rest (e.g. "Robinah Nabuti" → "Robinah" + "Nabuti")
 	// so we can render them at different weights for an editorial feel.
-	$name_parts = preg_split( '/\s+/', trim( $hero_title ), 2 );
-	$name_first = $name_parts[0] ?? '';
-	$name_rest  = $name_parts[1] ?? '';
+	$name_parts  = preg_split( '/\s+/', trim( $hero_title ), 2 );
+	$name_first  = $name_parts[0] ?? '';
+	$name_rest   = $name_parts[1] ?? '';
 	$story_label = $is_sponsorship && $name_first
-		? sprintf( '%s\'s story', $name_first )
+		/* translators: %s: beneficiary's first name */
+		? sprintf( __( "%s's story", 'pesa-donations' ), $name_first )
 		: __( 'Read the full story', 'pesa-donations' );
+	$story       = $campaign->get_content();
 	?>
 
 	<?php /* ---- Hero ---------------------------------------------------- */ ?>
@@ -86,8 +123,20 @@ $config = wp_json_encode( [
 					<p class="pd-checkout__location"><?php echo esc_html( $campaign->get_beneficiary_location() ); ?></p>
 				<?php endif; ?>
 
-				<?php if ( $campaign->get_content() ) : ?>
-					<a href="#pd-story-inline" class="pd-checkout__story-link" @click.prevent="toggleStory()">
+				<?php if ( $current_period ) : ?>
+					<p class="pd-card__period pd-checkout__period">
+						<span>
+							<?php esc_html_e( 'Giving toward', 'pesa-donations' ); ?>
+							<span class="pd-card__period-label"><?php echo esc_html( $current_period->get_label() ); ?></span>
+						</span>
+						<span><?php echo esc_html( $campaign->get_period_note() ); ?></span>
+					</p>
+				<?php endif; ?>
+
+				<?php if ( '' !== trim( $story ) ) : ?>
+					<a href="#<?php echo $field_id( 'story' ); ?>" class="pd-checkout__story-link"
+					   @click.prevent="toggleStory()" :aria-expanded="storyOpen ? 'true' : 'false'"
+					   aria-controls="<?php echo $field_id( 'story' ); ?>">
 						<span class="pd-checkout__story-icon" aria-hidden="true">
 							<svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor">
 								<path d="M3 2.5A1.5 1.5 0 0 1 4.5 1h11A1.5 1.5 0 0 1 17 2.5v14.75a.25.25 0 0 1-.4.2L10 12l-6.6 5.45a.25.25 0 0 1-.4-.2V2.5z"/>
@@ -100,10 +149,14 @@ $config = wp_json_encode( [
 		</div>
 
 		<?php /* inline story toggle — expands below the hero row when clicked */ ?>
-		<div class="pd-checkout__story-body" id="pd-story-inline" x-show="storyOpen" x-cloak style="display:none;">
+		<div class="pd-checkout__story-body" id="<?php echo $field_id( 'story' ); ?>" x-show="storyOpen" x-cloak style="display:none;">
 			<div class="pd-brand-bar"></div>
 			<div class="pd-prose">
-				<?php echo wp_kses_post( $campaign->get_content() ); ?>
+				<?php
+				// The_content output, as on the campaign's own page. wp_kses_post()
+				// here removed video embeds an editor had placed in the story.
+				echo $story; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+				?>
 			</div>
 			<?php if ( $campaign->get_beneficiary_code() ) : ?>
 				<p class="pd-modal__code"><?php echo esc_html( $campaign->get_beneficiary_code() ); ?></p>
@@ -111,18 +164,19 @@ $config = wp_json_encode( [
 			<div class="pd-brand-bar"></div>
 		</div>
 	</div>
+	<?php endif; /* $is_open */ ?>
 
 	<?php /* ---- Plan Selector with Slider -------------------------------- */ ?>
-	<?php if ( $has_plans && $is_sponsorship ) : ?>
+	<?php if ( $has_plans ) : ?>
 		<div class="pd-checkout__section pd-checkout__section--plans">
 			<h3 class="pd-checkout__section-title">
 				<?php esc_html_e( 'Choose your contribution', 'pesa-donations' ); ?>
 				<span class="pd-info-tip" title="<?php esc_attr_e( 'Your recurring monthly gift', 'pesa-donations' ); ?>">&#9432;</span>
 			</h3>
 
-			<div class="pd-amount-display">
+			<div class="pd-amount-display" aria-live="polite">
 				<span class="pd-amount-display__value"
-				      x-text="formatAmount(formData.amount) + ' ' + currency"></span>
+				      x-text="formatAmount(formData.amount) + ' ' + amountCurrency"></span>
 				<span class="pd-amount-display__plan-name"
 				      x-show="currentPlanName"
 				      x-text="'(' + currentPlanName + ')'"></span>
@@ -144,18 +198,16 @@ $config = wp_json_encode( [
 			</div>
 
 			<div class="pd-plan-buttons">
-				<?php foreach ( $plans as $plan ) :
-					$plan_currency = ! empty( $plan['currency'] ) ? strtoupper( $plan['currency'] ) : $currency;
-					$plan_payload  = array_merge( $plan, [ 'currency' => $plan_currency ] );
-					$label         = number_format( (float) $plan['amount'] ) . ' ' . $plan_currency;
-					if ( ! empty( $plan['name'] ) ) {
+				<?php foreach ( $plans as $i => $plan ) :
+					$label = number_format( (float) $plan['amount'] ) . ' ' . $plan['currency'];
+					if ( '' !== $plan['name'] ) {
 						$label .= ' (' . $plan['name'] . ')';
 					}
 				?>
 					<button type="button"
 					        class="pd-plan-btn"
-					        :class="{ 'pd-plan-btn--active': !customAmountOpen && selectedPlan && selectedPlan.name === '<?php echo esc_js( $plan['name'] ); ?>' }"
-					        @click="selectPlan(<?php echo esc_attr( wp_json_encode( $plan_payload ) ); ?>)">
+					        :class="{ 'pd-plan-btn--active': isPlanActive(<?php echo (int) $i; ?>) }"
+					        @click="selectPlan(<?php echo (int) $i; ?>)">
 						<?php echo esc_html( $label ); ?>
 					</button>
 				<?php endforeach; ?>
@@ -168,42 +220,46 @@ $config = wp_json_encode( [
 			</div>
 
 			<div class="pd-amount-custom" x-show="customAmountOpen" x-cloak style="display:none;margin-top:12px;">
-				<label for="pd-custom-amount" class="pd-label">
+				<label for="<?php echo $field_id( 'custom-amount' ); ?>" class="pd-label">
 					<?php esc_html_e( 'Enter your amount', 'pesa-donations' ); ?>
 				</label>
 				<div class="pd-input-group">
-					<span class="pd-input-group__prefix"><?php echo esc_html( $currency ); ?></span>
-					<input type="number" id="pd-custom-amount"
-					       x-model.number="formData.amount"
+					<span class="pd-input-group__prefix" x-text="amountCurrency"><?php echo esc_html( $currency ); ?></span>
+					<input type="text" inputmode="decimal" id="<?php echo $field_id( 'custom-amount' ); ?>"
+					       x-model="formData.amount"
 					       @input="onCustomChange()"
-					       :min="minAmount"
-					       step="<?php echo esc_attr( $currency === 'UGX' ? '1000' : '1' ); ?>"
+					       :class="{ 'pd-input--error': errors.amount }"
 					       class="pd-input" />
 				</div>
+				<p class="pd-error-msg" x-show="errors.amount" x-text="errors.amount"></p>
 			</div>
 		</div>
 	<?php else : ?>
 		<div class="pd-checkout__section pd-checkout__section--amount">
 			<h3 class="pd-checkout__section-title"><?php esc_html_e( 'Donation Amount', 'pesa-donations' ); ?></h3>
-			<?php if ( $campaign->get_suggested_amounts() ) : ?>
+			<?php if ( $suggested_amounts ) : ?>
 				<div class="pd-amount-buttons">
-					<?php foreach ( $campaign->get_suggested_amounts() as $sug ) : ?>
+					<?php foreach ( $suggested_amounts as $sug ) :
+						$sug_amount = (float) $sug['amount'];
+					?>
 						<button type="button"
 						        class="pd-amount-btn"
-						        :class="{ 'pd-amount-btn--active': formData.amount == <?php echo esc_js( $sug['amount'] ); ?> }"
-						        @click="formData.amount = <?php echo esc_js( $sug['amount'] ); ?>">
-							<?php echo esc_html( number_format( (float) $sug['amount'] ) . ' ' . ( $sug['currency'] ?? $currency ) ); ?>
+						        :class="{ 'pd-amount-btn--active': isAmount(<?php echo esc_attr( (string) wp_json_encode( $sug_amount ) ); ?>) }"
+						        @click="setAmount(<?php echo esc_attr( (string) wp_json_encode( $sug_amount ) ); ?>)">
+							<?php echo esc_html( number_format( $sug_amount ) . ' ' . ( $sug['currency'] ?? $currency ) ); ?>
 						</button>
 					<?php endforeach; ?>
 				</div>
 			<?php endif; ?>
 			<div class="pd-amount-custom">
-				<label for="pd-amount" class="pd-label"><?php esc_html_e( 'Or enter amount', 'pesa-donations' ); ?></label>
+				<label for="<?php echo $field_id( 'amount' ); ?>" class="pd-label">
+					<?php $suggested_amounts ? esc_html_e( 'Or enter amount', 'pesa-donations' ) : esc_html_e( 'Enter amount', 'pesa-donations' ); ?>
+				</label>
 				<div class="pd-input-group">
 					<span class="pd-input-group__prefix"><?php echo esc_html( $currency ); ?></span>
-					<input type="number" id="pd-amount" name="amount" x-model="formData.amount"
-					       min="<?php echo esc_attr( $campaign->get_minimum_amount() ); ?>"
-					       step="100" class="pd-input" />
+					<input type="text" inputmode="decimal" id="<?php echo $field_id( 'amount' ); ?>" x-model="formData.amount"
+					       :class="{ 'pd-input--error': errors.amount }"
+					       class="pd-input" />
 				</div>
 				<p class="pd-error-msg" x-show="errors.amount" x-text="errors.amount"></p>
 			</div>
@@ -218,23 +274,23 @@ $config = wp_json_encode( [
 
 		<div class="pd-checkout__toggle-org">
 			<label class="pd-toggle">
-				<input type="checkbox" x-model="isOrg" />
+				<input type="checkbox" x-model="isOrg" aria-labelledby="<?php echo $field_id( 'org-label' ); ?>" />
 				<span class="pd-toggle__slider"></span>
 			</label>
-			<span class="pd-toggle__label"><?php esc_html_e( 'This is an organization or group', 'pesa-donations' ); ?></span>
+			<span class="pd-toggle__label" id="<?php echo $field_id( 'org-label' ); ?>" @click="isOrg = !isOrg"><?php esc_html_e( 'This is an organization or group', 'pesa-donations' ); ?></span>
 		</div>
 
 		<div class="pd-form-row pd-form-row--2col">
 			<div class="pd-form-field">
-				<label class="pd-label"><?php esc_html_e( 'First Name', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
-				<input type="text" x-model="formData.first_name" class="pd-input"
+				<label class="pd-label" for="<?php echo $field_id( 'first-name' ); ?>"><?php esc_html_e( 'First Name', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+				<input type="text" id="<?php echo $field_id( 'first-name' ); ?>" x-model="formData.first_name" class="pd-input"
 				       :class="{ 'pd-input--error': errors.first_name }"
 				       autocomplete="given-name" />
 				<p class="pd-error-msg" x-show="errors.first_name" x-text="errors.first_name"></p>
 			</div>
 			<div class="pd-form-field">
-				<label class="pd-label"><?php esc_html_e( 'Last Name', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
-				<input type="text" x-model="formData.last_name" class="pd-input"
+				<label class="pd-label" for="<?php echo $field_id( 'last-name' ); ?>"><?php esc_html_e( 'Last Name', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+				<input type="text" id="<?php echo $field_id( 'last-name' ); ?>" x-model="formData.last_name" class="pd-input"
 				       :class="{ 'pd-input--error': errors.last_name }"
 				       autocomplete="family-name" />
 				<p class="pd-error-msg" x-show="errors.last_name" x-text="errors.last_name"></p>
@@ -242,42 +298,38 @@ $config = wp_json_encode( [
 		</div>
 
 		<div class="pd-form-field">
-			<label class="pd-label"><?php esc_html_e( 'Email Address', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
-			<input type="email" x-model="formData.email" class="pd-input"
+			<label class="pd-label" for="<?php echo $field_id( 'email' ); ?>"><?php esc_html_e( 'Email Address', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+			<input type="email" id="<?php echo $field_id( 'email' ); ?>" x-model="formData.email" class="pd-input"
 			       :class="{ 'pd-input--error': errors.email }"
-			       @blur="lookupDonor()"
 			       autocomplete="email" />
 			<p class="pd-error-msg" x-show="errors.email" x-text="errors.email"></p>
-			<p class="pd-input-hint" x-show="donorRecognized" x-cloak style="display:none;">
-				&#128075; <?php esc_html_e( 'Welcome back! We\'ve pre-filled your details.', 'pesa-donations' ); ?>
-			</p>
 		</div>
 
 		<div class="pd-form-field">
-			<label class="pd-label"><?php esc_html_e( 'Confirm Email Address', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
-			<input type="email" x-model="formData.confirm_email" class="pd-input"
-			       :class="{ 'pd-input--error': errors.confirm_email }" />
+			<label class="pd-label" for="<?php echo $field_id( 'confirm-email' ); ?>"><?php esc_html_e( 'Confirm Email Address', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+			<input type="email" id="<?php echo $field_id( 'confirm-email' ); ?>" x-model="formData.confirm_email" class="pd-input"
+			       :class="{ 'pd-input--error': errors.confirm_email }"
+			       autocomplete="email" />
 			<p class="pd-error-msg" x-show="errors.confirm_email" x-text="errors.confirm_email"></p>
 		</div>
 
 		<div class="pd-form-field">
-			<label class="pd-label"><?php esc_html_e( 'Phone Number', 'pesa-donations' ); ?></label>
-			<input type="tel" x-model="formData.phone" class="pd-input"
-			       @blur="lookupDonor()" autocomplete="tel" />
+			<label class="pd-label" for="<?php echo $field_id( 'phone' ); ?>"><?php esc_html_e( 'Phone Number', 'pesa-donations' ); ?></label>
+			<input type="tel" id="<?php echo $field_id( 'phone' ); ?>" x-model="formData.phone" class="pd-input" autocomplete="tel" />
 		</div>
 	</div>
 
 	<?php /* ---- Mailing Address ----------------------------------------- */ ?>
-	<?php if ( $campaign->checkout_requires_address() ) : ?>
+	<?php if ( $require_address ) : ?>
 		<div class="pd-checkout__section">
 			<h3 class="pd-checkout__section-title"><?php esc_html_e( 'Mailing Address', 'pesa-donations' ); ?></h3>
 
 			<div class="pd-form-field">
-				<label class="pd-label"><?php esc_html_e( 'Country', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
-				<select x-model="formData.country" class="pd-input pd-input--select"
-				        :class="{ 'pd-input--error': errors.country }">
+				<label class="pd-label" for="<?php echo $field_id( 'country' ); ?>"><?php esc_html_e( 'Country', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+				<select id="<?php echo $field_id( 'country' ); ?>" x-model="formData.country" class="pd-input pd-input--select"
+				        :class="{ 'pd-input--error': errors.country }" autocomplete="country">
 					<option value=""><?php esc_html_e( 'Select a country', 'pesa-donations' ); ?></option>
-					<?php foreach ( pd_get_countries() as $code => $name ) : ?>
+					<?php foreach ( Countries::all() as $code => $name ) : ?>
 						<option value="<?php echo esc_attr( $code ); ?>"><?php echo esc_html( $name ); ?></option>
 					<?php endforeach; ?>
 				</select>
@@ -286,45 +338,38 @@ $config = wp_json_encode( [
 
 			<div class="pd-form-row pd-form-row--2col">
 				<div class="pd-form-field">
-					<label class="pd-label"><?php esc_html_e( 'Address 1', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
-					<input type="text" x-model="formData.address1" class="pd-input"
+					<label class="pd-label" for="<?php echo $field_id( 'address1' ); ?>"><?php esc_html_e( 'Address 1', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+					<input type="text" id="<?php echo $field_id( 'address1' ); ?>" x-model="formData.address1" class="pd-input"
 					       :class="{ 'pd-input--error': errors.address1 }"
 					       autocomplete="address-line1" />
 					<p class="pd-error-msg" x-show="errors.address1" x-text="errors.address1"></p>
 				</div>
 				<div class="pd-form-field">
-					<label class="pd-label"><?php esc_html_e( 'Address 2', 'pesa-donations' ); ?></label>
-					<input type="text" x-model="formData.address2" class="pd-input" autocomplete="address-line2" />
+					<label class="pd-label" for="<?php echo $field_id( 'address2' ); ?>"><?php esc_html_e( 'Address 2', 'pesa-donations' ); ?></label>
+					<input type="text" id="<?php echo $field_id( 'address2' ); ?>" x-model="formData.address2" class="pd-input" autocomplete="address-line2" />
 				</div>
 			</div>
 
 			<div class="pd-form-row pd-form-row--2col">
 				<div class="pd-form-field">
-					<label class="pd-label"><?php esc_html_e( 'City', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
-					<input type="text" x-model="formData.city" class="pd-input"
+					<label class="pd-label" for="<?php echo $field_id( 'city' ); ?>"><?php esc_html_e( 'City', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+					<input type="text" id="<?php echo $field_id( 'city' ); ?>" x-model="formData.city" class="pd-input"
 					       :class="{ 'pd-input--error': errors.city }"
 					       autocomplete="address-level2" />
 					<p class="pd-error-msg" x-show="errors.city" x-text="errors.city"></p>
 				</div>
 				<div class="pd-form-field">
-					<label class="pd-label"><?php esc_html_e( 'State / Province', 'pesa-donations' ); ?></label>
-					<input type="text" x-model="formData.state" class="pd-input" autocomplete="address-level1" />
+					<label class="pd-label" for="<?php echo $field_id( 'state' ); ?>"><?php esc_html_e( 'State / Province', 'pesa-donations' ); ?></label>
+					<input type="text" id="<?php echo $field_id( 'state' ); ?>" x-model="formData.state" class="pd-input" autocomplete="address-level1" />
 				</div>
 			</div>
 
 			<div class="pd-form-field">
-				<label class="pd-label"><?php esc_html_e( 'Zip / Postal Code', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
-				<input type="text" x-model="formData.zip" class="pd-input"
+				<label class="pd-label" for="<?php echo $field_id( 'zip' ); ?>"><?php esc_html_e( 'Zip / Postal Code', 'pesa-donations' ); ?> <span class="pd-required">*</span></label>
+				<input type="text" id="<?php echo $field_id( 'zip' ); ?>" x-model="formData.zip" class="pd-input"
 				       :class="{ 'pd-input--error': errors.zip }"
 				       autocomplete="postal-code" />
 				<p class="pd-error-msg" x-show="errors.zip" x-text="errors.zip"></p>
-			</div>
-
-			<div class="pd-form-field pd-form-field--checkbox">
-				<label>
-					<input type="checkbox" x-model="formData.billing_same" />
-					<?php esc_html_e( 'Billing address same as mailing address', 'pesa-donations' ); ?>
-				</label>
 			</div>
 		</div>
 	<?php endif; ?>
@@ -335,8 +380,8 @@ $config = wp_json_encode( [
 
 		<?php if ( $referrals ) : ?>
 			<div class="pd-form-field">
-				<label class="pd-label"><?php esc_html_e( 'How did you hear about us?', 'pesa-donations' ); ?></label>
-				<select x-model="formData.how_heard" class="pd-input pd-input--select">
+				<label class="pd-label" for="<?php echo $field_id( 'how-heard' ); ?>"><?php esc_html_e( 'How did you hear about us?', 'pesa-donations' ); ?></label>
+				<select id="<?php echo $field_id( 'how-heard' ); ?>" x-model="formData.how_heard" class="pd-input pd-input--select">
 					<option value=""><?php esc_html_e( 'Select one', 'pesa-donations' ); ?></option>
 					<?php foreach ( $referrals as $source ) : ?>
 						<option value="<?php echo esc_attr( $source ); ?>"><?php echo esc_html( $source ); ?></option>
@@ -346,9 +391,18 @@ $config = wp_json_encode( [
 		<?php endif; ?>
 
 		<div class="pd-form-field">
-			<label class="pd-label"><?php esc_html_e( 'Additional Notes or Comments', 'pesa-donations' ); ?></label>
-			<textarea x-model="formData.notes" class="pd-input pd-input--textarea" rows="4"></textarea>
+			<label class="pd-label" for="<?php echo $field_id( 'notes' ); ?>"><?php esc_html_e( 'Additional Notes or Comments', 'pesa-donations' ); ?></label>
+			<textarea id="<?php echo $field_id( 'notes' ); ?>" x-model="formData.notes" class="pd-input pd-input--textarea" rows="4" maxlength="2000"></textarea>
 		</div>
+
+		<?php if ( $allow_anonymous ) : ?>
+			<div class="pd-form-field pd-form-field--checkbox">
+				<label>
+					<input type="checkbox" x-model="formData.anonymous" />
+					<?php esc_html_e( 'Give anonymously', 'pesa-donations' ); ?>
+				</label>
+			</div>
+		<?php endif; ?>
 
 		<div class="pd-form-field pd-form-field--checkbox">
 			<label>
@@ -391,6 +445,7 @@ $config = wp_json_encode( [
 					);
 				} else {
 					printf(
+						/* translators: 1: site name, 2: "Terms & Conditions for Donation Payments" */
 						esc_html__( "I understand and agree to %1\$s's %2\$s", 'pesa-donations' ),
 						esc_html( $site_name ),
 						esc_html( $terms_link_txt )
@@ -404,14 +459,15 @@ $config = wp_json_encode( [
 
 	<?php /* ---- Error / Submit ------------------------------------------ */ ?>
 	<div class="pd-checkout__submit">
-		<p class="pd-error-msg pd-error-msg--global" x-show="globalError" x-text="globalError"></p>
+		<p class="pd-error-msg pd-error-msg--global" role="alert" x-show="globalError" x-text="globalError"></p>
 
 		<button type="button"
 		        class="pd-btn pd-btn--primary pd-btn--lg pd-btn--full"
 		        @click="submit()"
-		        :disabled="loading">
+		        :disabled="loading"
+		        :aria-busy="loading ? 'true' : 'false'">
 			<span x-show="!loading"><?php esc_html_e( 'Continue to Payment', 'pesa-donations' ); ?></span>
-			<span x-show="loading"><?php esc_html_e( 'Please wait…', 'pesa-donations' ); ?></span>
+			<span x-show="loading" x-cloak style="display:none;"><?php esc_html_e( 'Please wait…', 'pesa-donations' ); ?></span>
 		</button>
 	</div>
 
@@ -422,7 +478,7 @@ $config = wp_json_encode( [
 	     x-transition.opacity
 	     style="display:none;">
 
-		<div class="pd-iframe-modal" role="dialog" aria-modal="true">
+		<div class="pd-iframe-modal" role="dialog" aria-modal="true" aria-label="<?php esc_attr_e( 'Secure payment', 'pesa-donations' ); ?>">
 			<button type="button"
 			        class="pd-iframe-modal__close"
 			        @click="closeIframe()"
@@ -439,15 +495,3 @@ $config = wp_json_encode( [
 	</div>
 
 </div><!-- /.pd-checkout -->
-
-<?php
-// Helper available globally after template is loaded.
-function pd_get_countries(): array {
-	return [
-		'UG' => 'Uganda',   'KE' => 'Kenya',    'TZ' => 'Tanzania',
-		'RW' => 'Rwanda',   'SS' => 'South Sudan','BI' => 'Burundi',
-		'US' => 'United States', 'GB' => 'United Kingdom', 'CA' => 'Canada',
-		'AU' => 'Australia', 'DE' => 'Germany',  'NL' => 'Netherlands',
-		'ZA' => 'South Africa', 'NG' => 'Nigeria', 'GH' => 'Ghana',
-	];
-}

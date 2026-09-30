@@ -1,0 +1,49 @@
+# .graphifyignore - keeps the code graph about OUR code, not vendors'
+# gitignore syntax. Merged with .gitignore; can only exclude MORE, never re-include.
+# Added 2026-08-29. See D:\OS\references\code-graph.md
+
+# --- PHP / Composer -------------------------------------------------
+vendor/
+storage/
+bootstrap/cache/
+
+# --- compiled & vendor front-end bundles ----------------------------
+# These are minified third-party bundles. Indexing them produces fake
+# "god nodes" like x(), te(), V() that drown out real architecture.
+public/js/
+public/css/
+public/vendor/
+public/build/
+public/hot
+public/storage/
+resources/js/vendor/
+*.min.js
+*.min.css
+*-bundle.js
+*.bundle.js
+
+# --- JS / mobile ----------------------------------------------------
+node_modules/
+.expo/
+android/app/build/
+android/build/
+ios/Pods/
+ios/build/
+web-build/
+
+# --- archives, dumps, media ----------------------------------------
+*.zip
+*.rar
+*.apk
+*.aab
+*.sql
+*.sqlite
+*.db
+
+# --- test / coverage artefacts --------------------------------------
+coverage/
+.phpunit.cache/
+
+# PesaDonations
+includes/vendor/
+assets/js/alpine.min.js

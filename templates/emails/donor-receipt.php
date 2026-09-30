@@ -7,11 +7,14 @@ declare( strict_types=1 );
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 /** @var \PesaDonations\Models\Donation $donation */
-/** @var \PesaDonations\Models\Campaign $campaign */
+/** @var \PesaDonations\Models\Campaign|null $campaign Null for an open donation. */
 
 $donor_name    = $donation->get_donor_name() ?: __( 'Friend', 'pesa-donations' );
-$campaign_name = $campaign->get_beneficiary_name() ?: $campaign->get_title();
-$amount_text   = number_format( $donation->get_amount(), 2 ) . ' ' . esc_html( $donation->get_currency() );
+$campaign_name = $campaign
+	? ( $campaign->get_beneficiary_name() ?: $campaign->get_title() )
+	: \PesaDonations\Models\Open_Donation::label();
+$period        = $campaign ? $campaign->get_period_for_donation( $donation->get_created_at() ) : null;
+$amount_text   = \PesaDonations\Utils\Money::format( $donation->get_amount(), $donation->get_currency() ); // Escaped where printed.
 $date_text     = mysql2date( get_option( 'date_format', 'F j, Y' ), $donation->get_completed_at() ?: current_time( 'mysql' ) );
 $reference     = $donation->get_merchant_reference();
 ?>
@@ -31,7 +34,8 @@ $reference     = $donation->get_merchant_reference();
 	echo esc_html( sprintf(
 		/* translators: %s: campaign / beneficiary */
 		__( 'Your generous contribution to %s has been received. Below is a copy of your receipt for your records.', 'pesa-donations' ),
-		$campaign_name
+		// An open donation is a gift to the organisation itself.
+		$campaign ? $campaign_name : get_bloginfo( 'name' )
 	) );
 	?>
 </p>
@@ -58,6 +62,12 @@ $reference     = $donation->get_merchant_reference();
 					<td style="padding:4px 0;color:#888;"><?php esc_html_e( 'Campaign', 'pesa-donations' ); ?></td>
 					<td style="padding:4px 0;text-align:right;color:#222;"><?php echo esc_html( $campaign_name ); ?></td>
 				</tr>
+				<?php if ( $period ) : ?>
+				<tr>
+					<td style="padding:4px 0;color:#888;"><?php esc_html_e( 'Period', 'pesa-donations' ); ?></td>
+					<td style="padding:4px 0;text-align:right;color:#222;"><?php echo esc_html( $period->get_label() ); ?></td>
+				</tr>
+				<?php endif; ?>
 				<tr>
 					<td style="padding:4px 0;color:#888;"><?php esc_html_e( 'Payment Method', 'pesa-donations' ); ?></td>
 					<td style="padding:4px 0;text-align:right;color:#222;"><?php echo esc_html( ucfirst( $donation->get_gateway() ) ); ?></td>
@@ -76,10 +86,11 @@ $reference     = $donation->get_merchant_reference();
 </p>
 
 <p style="margin:18px 0 0;color:#888;font-size:13px;">
+	<?php esc_html_e( 'Warmly,', 'pesa-donations' ); ?><br>
 	<?php
 	echo esc_html( sprintf(
 		/* translators: %s: site name */
-		__( 'Warmly,<br>The %s Team', 'pesa-donations' ),
+		__( 'The %s Team', 'pesa-donations' ),
 		get_bloginfo( 'name' )
 	) );
 	?>

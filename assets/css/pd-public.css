@@ -5,7 +5,7 @@
    BEM naming, scoped to .pd-* selectors only.
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Outfit:wght@600;700;800;900&display=swap');
+/* Fonts load as their own stylesheet (pd-fonts, enqueued in parallel), not an @import. */
 
 /* ---- Tokens ------------------------------------------------------------- */
 :root {
@@ -398,6 +398,28 @@
 	margin: 16px 0 !important;
 }
 .pd-modal__content p { margin: 0 0 16px !important; }
+
+/* The story loads when the details open: lines in its place until it arrives. */
+.pd-modal__loading { margin: 16px 0 !important; }
+.pd-modal__loading span {
+	display: block;
+	height: 12px !important;
+	margin: 0 0 12px !important;
+	border-radius: 6px !important;
+	background: linear-gradient(90deg, var(--pd-line) 25%, var(--pd-surface-soft) 50%, var(--pd-line) 75%) !important;
+	background-size: 200% 100% !important;
+	animation: pd-shimmer 1.2s linear infinite;
+}
+.pd-modal__loading span:nth-child(2) { width: 92% !important; }
+.pd-modal__loading span:nth-child(3) { width: 64% !important; }
+@keyframes pd-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .pd-modal__loading span { animation: none; } }
+.pd-modal__error { font-size: 14px !important; color: var(--pd-ink-muted) !important; margin: 16px 0 !important; }
+.pd-modal__error button {
+	background: none !important; border: 0 !important; padding: 0 !important;
+	color: var(--pd-coral) !important; font: inherit !important; font-weight: 700 !important;
+	text-decoration: underline !important; cursor: pointer !important;
+}
 .pd-modal__code {
 	font-family: ui-monospace, monospace !important;
 	font-size: 12px !important;
@@ -1878,8 +1900,10 @@
    Slider — [pd_sponsor_slider] / [pd_give_slider]
    ========================================================================== */
 
+/* per_view arrives inline as --pd-slider-cols. It used to be set on
+   --pd-slider-per-view itself, which the !important here always beat. */
 .pd-slider {
-	--pd-slider-per-view: 3 !important;
+	--pd-slider-per-view: var(--pd-slider-cols, 3) !important;
 	--pd-slider-gap: 20px !important;
 	position: relative !important;
 	font-family: var(--pd-body-font) !important;
@@ -1911,7 +1935,7 @@
 .pd-slider__slide > .pd-card { width: 100% !important; }
 
 @media (max-width: 960px) {
-	.pd-slider { --pd-slider-per-view: 2 !important; }
+	.pd-slider { --pd-slider-per-view: min(2, var(--pd-slider-cols, 3)) !important; }
 }
 @media (max-width: 560px) {
 	.pd-slider { --pd-slider-per-view: 1 !important; --pd-slider-gap: 16px !important; }
@@ -1965,4 +1989,50 @@
 	border-radius: 2px !important;
 	margin: 18px 0 !important;
 	opacity: .9 !important;
+}
+
+/* ---- Campaign period (repeating campaigns) ------------------------------
+   Two stacked lines, "Term 3 2026" over "Ends 5 Dec 2026", so a narrow
+   slider card and a wide grid card read the same. */
+.pd-card__period {
+	display: flex;
+	flex-direction: column !important;
+	gap: 1px !important;
+	font-size: 12px !important;
+	font-weight: 500 !important;
+	line-height: 1.4 !important;
+	color: var(--pd-ink-muted) !important;
+	margin: 0 !important;
+}
+.pd-card__period-label {
+	font-weight: 700 !important;
+	color: var(--pd-ink) !important;
+}
+.pd-checkout__period {
+	font-size: 13px !important;
+	margin: 0 0 10px !important;
+}
+
+/* ---- Open donation (no campaign) --------------------------------------- */
+.pd-checkout__open-title {
+	font-family: var(--pd-display-font) !important;
+	font-size: 34px !important;
+	font-weight: 900 !important;
+	line-height: 1.05 !important;
+	letter-spacing: -1px !important;
+	margin: 0 !important;
+	color: var(--pd-ink) !important;
+	text-transform: none !important;
+}
+.pd-checkout__open-intro {
+	font-size: 15px !important;
+	color: var(--pd-ink-muted) !important;
+	line-height: 1.55 !important;
+	margin: 10px 0 0 !important;
+	max-width: 60ch !important;
+}
+@media (max-width: 600px) {
+	.pd-checkout__open-title { font-size: 28px !important; }
+	/* The hero centres its text on phones; the period line follows it. */
+	.pd-checkout__period     { align-items: center !important; }
 }

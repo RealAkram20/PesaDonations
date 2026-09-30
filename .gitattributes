@@ -1,0 +1,7 @@
+# Kept out of GitHub's release archives, which the plugin updater installs on client sites.
+CLAUDE.md export-ignore
+/docs export-ignore
+.gitattributes export-ignore
+graphify-out/graph.json merge=graphify
+.graphifyignore export-ignore
+/tests export-ignore

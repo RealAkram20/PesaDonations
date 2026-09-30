@@ -6,10 +6,10 @@ namespace PesaDonations\Core;
 class Activator {
 
 	public static function activate(): void {
-		if ( ! current_user_can( 'activate_plugins' ) ) {
-			return;
-		}
-
+		// No capability check here: WordPress checks it before activating from
+		// the Plugins screen, and a WP-CLI or scripted activation has no user,
+		// so the check made those skip the install (no role, no capabilities,
+		// no scheduled jobs) without a word.
 		Installer::install();
 
 		// Register CPT so rewrite flush picks it up.

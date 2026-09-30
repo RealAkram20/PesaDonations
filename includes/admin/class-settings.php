@@ -3,36 +3,73 @@ declare( strict_types=1 );
 
 namespace PesaDonations\Admin;
 
+use PesaDonations\Payments\Pesapal\Pesapal_Auth;
+use PesaDonations\Payments\Pesapal\Pesapal_Gateway;
+
 class Settings {
 
-	private const OPTION_GROUP = 'pd_settings';
+	/** Stored secrets: never printed into the page; a blank box keeps the saved value. */
+	private const SECRETS = [ 'pd_pesapal_consumer_secret', 'pd_paypal_client_secret' ];
 
-	public function render(): void {
-		if ( isset( $_POST['pd_settings_nonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['pd_settings_nonce'] ) ), 'pd_save_settings' ) ) {
-			$this->save();
-			echo '<div class="notice notice-success"><p>' . esc_html__( 'Settings saved.', 'pesa-donations' ) . '</p></div>';
+	/**
+	 * Runs on load-{page}, before any output: saves, registers the IPN when
+	 * asked, then redirects so a reload does not post the form again.
+	 */
+	public static function handle(): void {
+		if ( 'POST' !== ( $_SERVER['REQUEST_METHOD'] ?? '' ) || ! isset( $_POST['pd_settings_nonce'] ) ) {
+			return;
+		}
+		check_admin_referer( 'pd_save_settings', 'pd_settings_nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You do not have permission.', 'pesa-donations' ), 403 );
 		}
 
-		// Handle "Register IPN" button click.
-		if (
-			isset( $_POST['pd_register_ipn'] ) &&
-			isset( $_POST['pd_settings_nonce'] ) &&
-			wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['pd_settings_nonce'] ) ), 'pd_save_settings' )
-		) {
-			delete_option( 'pd_pesapal_ipn_id' );
-			delete_option( 'pd_pesapal_ipn_env' );
-			$ipn_id = ( new \PesaDonations\Payments\Pesapal\Pesapal_Gateway() )->ensure_ipn_registered();
-			if ( $ipn_id ) {
-				echo '<div class="notice notice-success"><p>' . esc_html__( 'PesaPal IPN registered successfully. IPN ID: ', 'pesa-donations' ) . esc_html( $ipn_id ) . '</p></div>';
-			} else {
-				echo '<div class="notice notice-error"><p>' . esc_html__( 'Failed to register IPN. Check that your keys are correct and see the logs.', 'pesa-donations' ) . '</p></div>';
+		$errors = ( new self() )->save();
+		$args   = [
+			'page'     => 'pd-settings',
+			'tab'      => isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'general',
+			'pd_saved' => 1,
+		];
+
+		// Saved first, so the registration uses the keys just entered.
+		if ( isset( $_POST['pd_register_ipn'] ) ) {
+			Pesapal_Gateway::forget_ipn();
+			$args['pd_ipn'] = ( new Pesapal_Gateway() )->ensure_ipn_registered() ? 'ok' : 'failed';
+		}
+
+		if ( $errors ) {
+			set_transient( 'pd_settings_errors_' . get_current_user_id(), $errors, 5 * MINUTE_IN_SECONDS );
+		}
+		wp_safe_redirect( add_query_arg( $args, admin_url( 'admin.php' ) ) );
+		exit;
+	}
+
+	private function notices(): void {
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- display only.
+		$errors = get_transient( 'pd_settings_errors_' . get_current_user_id() );
+		if ( is_array( $errors ) ) {
+			delete_transient( 'pd_settings_errors_' . get_current_user_id() );
+			foreach ( $errors as $error ) {
+				echo '<div class="notice notice-error"><p>' . esc_html( (string) $error ) . '</p></div>';
 			}
 		}
+		if ( isset( $_GET['pd_saved'] ) ) {
+			echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Settings saved.', 'pesa-donations' ) . '</p></div>';
+		}
+		if ( isset( $_GET['pd_ipn'] ) ) {
+			echo 'ok' === $_GET['pd_ipn']
+				? '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'PesaPal IPN registered.', 'pesa-donations' ) . '</p></div>'
+				: '<div class="notice notice-error"><p>' . esc_html__( 'PesaPal did not register the IPN. Check the environment and keys, then try again. The gateway log has PesaPal\'s answer.', 'pesa-donations' ) . '</p></div>';
+		}
+		// phpcs:enable
+	}
 
+	public function render(): void {
 		$tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'general';
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'PesaDonations Settings', 'pesa-donations' ); ?></h1>
+			<?php $this->notices(); ?>
 			<nav class="nav-tab-wrapper">
 				<?php foreach ( $this->tabs() as $id => $label ) : ?>
 					<a href="<?php echo esc_url( add_query_arg( [ 'page' => 'pd-settings', 'tab' => $id ], admin_url( 'admin.php' ) ) ); ?>"
@@ -49,7 +86,40 @@ class Settings {
 				<?php endif; ?>
 			</form>
 		</div>
+		<script>
+		// Show / hide on secret fields. It reveals what is being typed; the stored secret never reaches the page.
+		document.addEventListener( 'click', function ( e ) {
+			var btn = e.target.closest( '.pd-secret__eye' );
+			if ( ! btn ) { return; }
+			var input = document.getElementById( btn.getAttribute( 'aria-controls' ) );
+			if ( ! input ) { return; }
+			var show = 'password' === input.type;
+			input.type = show ? 'text' : 'password';
+			btn.setAttribute( 'aria-pressed', show ? 'true' : 'false' );
+			btn.setAttribute( 'aria-label', show ? btn.dataset.hide : btn.dataset.show );
+			btn.querySelector( '.dashicons' ).className = 'dashicons ' + ( show ? 'dashicons-hidden' : 'dashicons-visibility' );
+		} );
+		</script>
+		<style>
+			.pd-secret { display: inline-flex; align-items: stretch; }
+			.pd-secret input { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+			.pd-secret__eye.button { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; display: inline-flex; align-items: center; }
+		</style>
 		<?php
+	}
+
+	/** A password field with the show/hide eye. Empty on screen; a placeholder says whether one is saved. */
+	private function secret( string $name, string $label ): void {
+		$saved = '' !== (string) get_option( $name, '' );
+		$field = sprintf(
+			'<span class="pd-secret"><input type="password" name="%1$s" id="%1$s" value="" class="regular-text" autocomplete="new-password" spellcheck="false" placeholder="%2$s" />'
+			. '<button type="button" class="button pd-secret__eye" aria-controls="%1$s" aria-pressed="false" aria-label="%3$s" data-show="%3$s" data-hide="%4$s"><span class="dashicons dashicons-visibility" aria-hidden="true"></span></button></span>',
+			esc_attr( $name ),
+			esc_attr( $saved ? __( 'Saved. Type a new one to replace it.', 'pesa-donations' ) : '' ),
+			esc_attr__( 'Show secret', 'pesa-donations' ),
+			esc_attr__( 'Hide secret', 'pesa-donations' )
+		);
+		$this->row( '<label for="' . esc_attr( $name ) . '">' . esc_html( $label ) . '</label>', $field );
 	}
 
 	private function tabs(): array {
@@ -58,6 +128,7 @@ class Settings {
 			'pesapal'    => __( 'PesaPal', 'pesa-donations' ),
 			'paypal'     => __( 'PayPal', 'pesa-donations' ),
 			'emails'     => __( 'Emails', 'pesa-donations' ),
+			'open'       => __( 'Open Donations', 'pesa-donations' ),
 			'advanced'   => __( 'Advanced', 'pesa-donations' ),
 			'shortcodes' => __( 'Shortcodes', 'pesa-donations' ),
 		];
@@ -74,6 +145,7 @@ class Settings {
 			'pesapal'  => $this->render_pesapal(),
 			'paypal'   => $this->render_paypal(),
 			'emails'   => $this->render_emails(),
+			'open'     => $this->render_open(),
 			'advanced' => $this->render_advanced(),
 			default    => null,
 		};
@@ -118,21 +190,19 @@ class Settings {
 			'production' => __( 'Production (Live)', 'pesa-donations' ),
 		] );
 		$this->input( 'pd_pesapal_consumer_key',    __( 'Consumer Key', 'pesa-donations' ) );
-		$this->input( 'pd_pesapal_consumer_secret', __( 'Consumer Secret', 'pesa-donations' ), 'password' );
+		$this->secret( 'pd_pesapal_consumer_secret', __( 'Consumer Secret', 'pesa-donations' ) );
 
-		$ipn_url     = \PesaDonations\Payments\Pesapal\Pesapal_Gateway::get_ipn_url();
-		$ipn_id      = (string) get_option( 'pd_pesapal_ipn_id' );
-		$ipn_env     = (string) get_option( 'pd_pesapal_ipn_env' );
-		$current_env = (string) get_option( 'pd_pesapal_environment', 'sandbox' );
+		$ipn_url = Pesapal_Gateway::get_ipn_url();
+		$ipn_id  = (string) get_option( 'pd_pesapal_ipn_id' );
 
-		$status = $ipn_id && $ipn_env === $current_env
-			? '<span style="color:#28a745;">&#9989; ' . esc_html__( 'Registered', 'pesa-donations' ) . '</span> &nbsp; <code>' . esc_html( $ipn_id ) . '</code>'
-			: '<span style="color:#c62828;">&#10060; ' . esc_html__( 'Not registered yet', 'pesa-donations' ) . '</span>';
+		// Current means: registered for this environment, these keys and this URL.
+		$status = Pesapal_Gateway::is_ipn_current()
+			? '<span style="color:#1e7e34;">&#9989; ' . esc_html__( 'Registered', 'pesa-donations' ) . '</span> &nbsp; <code>' . esc_html( $ipn_id ) . '</code>'
+			: '<span style="color:#b32d2e;">&#10060; ' . esc_html__( 'Not registered for these keys yet. It registers with the next payment, or now with the button.', 'pesa-donations' ) . '</span>';
 
 		$ipn_field  = '<code style="display:block;padding:8px;background:#f5f5f5;margin-bottom:8px;user-select:all;">' . esc_html( $ipn_url ) . '</code>';
-		$ipn_field .= '<p class="description">' . esc_html__( 'PesaPal will POST to this URL whenever a payment status changes. Save your keys first, then click the button below to register.', 'pesa-donations' ) . '</p>';
 		$ipn_field .= '<p>' . $status . '</p>';
-		$ipn_field .= '<p><button type="submit" name="pd_register_ipn" value="1" class="button button-secondary">' . esc_html__( 'Register / Re-register IPN with PesaPal', 'pesa-donations' ) . '</button></p>';
+		$ipn_field .= '<p><button type="submit" name="pd_register_ipn" value="1" class="button button-secondary">' . esc_html__( 'Save and register IPN with PesaPal', 'pesa-donations' ) . '</button></p>';
 
 		$this->row( '<strong>' . esc_html__( 'IPN URL', 'pesa-donations' ) . '</strong>', $ipn_field );
 	}
@@ -143,7 +213,7 @@ class Settings {
 			'production' => __( 'Production (Live)', 'pesa-donations' ),
 		] );
 		$this->input( 'pd_paypal_client_id',     __( 'Client ID', 'pesa-donations' ) );
-		$this->input( 'pd_paypal_client_secret', __( 'Client Secret', 'pesa-donations' ), 'password' );
+		$this->secret( 'pd_paypal_client_secret', __( 'Client Secret', 'pesa-donations' ) );
 		$this->select( 'pd_paypal_integration', __( 'Integration Style', 'pesa-donations' ), [
 			'smart_buttons' => __( 'Smart Payment Buttons (Recommended)', 'pesa-donations' ),
 			'redirect'      => __( 'Redirect Checkout', 'pesa-donations' ),
@@ -163,7 +233,54 @@ class Settings {
 		);
 	}
 
+	/** A donation with no campaign: the donor just enters an amount. */
+	private function render_open(): void {
+		$enabled = \PesaDonations\Models\Open_Donation::is_enabled();
+		$this->row(
+			esc_html__( 'Open donations', 'pesa-donations' ),
+			'<input type="hidden" name="pd_open_enabled" value="0" />'
+			. '<label><input type="checkbox" name="pd_open_enabled" value="1" ' . checked( $enabled, true, false ) . ' /> '
+			. esc_html__( 'Accept donations that are not for a specific campaign', 'pesa-donations' ) . '</label>'
+			. '<p class="description">' . sprintf(
+				/* translators: %s: shortcode */
+				esc_html__( 'Place %s on any page. The Donation Checkout page also shows this form when it is opened without a campaign.', 'pesa-donations' ),
+				'<code>[pd_donate]</code>'
+			) . '</p>'
+		);
+
+		$this->input( 'pd_open_title', __( 'Form heading', 'pesa-donations' ), 'text', __( 'Shown above the form, e.g. "Support our work".', 'pesa-donations' ) );
+
+		$intro = (string) get_option( 'pd_open_intro', '' );
+		$this->row(
+			'<label for="pd_open_intro">' . esc_html__( 'Intro text', 'pesa-donations' ) . '</label>',
+			'<textarea name="pd_open_intro" id="pd_open_intro" rows="3" class="large-text">' . esc_textarea( $intro ) . '</textarea>'
+			. '<p class="description">' . esc_html__( 'Optional. One or two sentences under the heading.', 'pesa-donations' ) . '</p>'
+		);
+
+		$this->input(
+			'pd_open_amounts',
+			__( 'Quick-pick amounts', 'pesa-donations' ),
+			'text',
+			sprintf(
+				/* translators: %s: currency code */
+				__( 'Separated by commas, in %s (the default currency on the General tab). The donor can still type any amount.', 'pesa-donations' ),
+				\PesaDonations\Models\Open_Donation::currency()
+			)
+		);
+		$this->input( 'pd_open_min_amount', __( 'Minimum amount', 'pesa-donations' ), 'number' );
+		$this->input( 'pd_open_label', __( 'Name on receipts and reports', 'pesa-donations' ), 'text', __( 'How these donations are named in admin lists, receipts and filters, e.g. "General donation".', 'pesa-donations' ) );
+	}
+
 	private function render_advanced(): void {
+		$slug  = \PesaDonations\Modules\Dashboard\Dashboard::slug();
+		$field = '<code style="margin-right:4px;">' . esc_html( trailingslashit( home_url() ) ) . '</code>'
+			. '<input type="text" name="pd_dashboard_slug" id="pd_dashboard_slug" value="' . esc_attr( $slug ) . '" class="regular-text" style="width:14em;" />'
+			. ' <a href="' . esc_url( \PesaDonations\Modules\Dashboard\Dashboard::url() ) . '" target="_blank" rel="noopener">' . esc_html__( 'Open', 'pesa-donations' ) . '</a>';
+		if ( get_page_by_path( $slug ) ) {
+			$field .= '<p class="description" style="color:#b32d2e;">' . esc_html__( 'A page already uses this address, and the dashboard now hides it. Choose another address.', 'pesa-donations' ) . '</p>';
+		}
+		$this->row( '<label for="pd_dashboard_slug">' . esc_html__( 'Dashboard address', 'pesa-donations' ) . '</label>', $field );
+
 		$this->input( 'pd_log_retention_days', __( 'Log Retention (days)', 'pesa-donations' ), 'number', __( 'Gateway logs older than this are automatically deleted.', 'pesa-donations' ) );
 
 		$this->input(
@@ -177,6 +294,15 @@ class Settings {
 			'pd_brand_color',
 			__( 'Brand Color', 'pesa-donations' ),
 			__( 'Accent color used for buttons, progress bars, and highlights. Supports HEX entry and transparency.', 'pesa-donations' )
+		);
+
+		$remove = '1' === (string) get_option( 'pd_remove_data_on_uninstall', '0' );
+		$this->row(
+			esc_html__( 'On delete', 'pesa-donations' ),
+			'<input type="hidden" name="pd_remove_data_on_uninstall" value="0" />'
+			. '<label><input type="checkbox" name="pd_remove_data_on_uninstall" value="1" ' . checked( $remove, true, false ) . ' /> '
+			. esc_html__( 'Delete all donations, donors, campaigns and settings when the plugin is deleted', 'pesa-donations' ) . '</label>'
+			. '<p class="description">' . esc_html__( 'Off: deleting the plugin keeps every record, so reinstalling restores them. Deactivating never deletes anything.', 'pesa-donations' ) . '</p>'
 		);
 	}
 
@@ -596,8 +722,18 @@ class Settings {
 				'recommended' => __( 'Useful inside article content, sidebars, or widgets.', 'pesa-donations' ),
 			],
 			[
+				'tag'         => 'pd_donate',
+				'purpose'     => __( 'Open donation form: no campaign, the donor just enters an amount. Recorded as a general donation. Settings → Open Donations sets the heading, quick-pick amounts and minimum.', 'pesa-donations' ),
+				'params'      => [
+					'title'   => __( 'Heading (default from Settings → Open Donations)', 'pesa-donations' ),
+					'amounts' => __( 'Quick-pick amounts, comma-separated, e.g. "20000,50000,100000"', 'pesa-donations' ),
+				],
+				'example'     => '[pd_donate title="Support our work"]',
+				'recommended' => __( 'Put this on your "Donate" page or in a footer section.', 'pesa-donations' ),
+			],
+			[
 				'tag'         => 'pd_checkout',
-				'purpose'     => __( 'Donation checkout form. Auto-loads the campaign from ?pd_cid=ID in the URL.', 'pesa-donations' ),
+				'purpose'     => __( 'Donation checkout form. Auto-loads the campaign from ?pd_cid=ID in the URL; with no campaign it shows the open donation form.', 'pesa-donations' ),
 				'params'      => [],
 				'example'     => '[pd_checkout]',
 				'recommended' => sprintf(
@@ -755,31 +891,103 @@ class Settings {
 		<?php
 	}
 
-	private function save(): void {
-		$fields = [
-			'pd_default_currency', 'pd_pesapal_environment', 'pd_pesapal_consumer_key',
-			'pd_pesapal_consumer_secret', 'pd_paypal_environment', 'pd_paypal_client_id',
-			'pd_paypal_client_secret', 'pd_paypal_integration', 'pd_email_from_name',
-			'pd_email_from_address', 'pd_log_retention_days', 'pd_admin_alert_email',
-			'pd_terms_url',
+	/**
+	 * Saves the fields the submitted tab carries. A value that fails its check
+	 * is not saved (the previous one stays) and is reported.
+	 *
+	 * @return string[] What was refused, for the notice.
+	 */
+	private function save(): array {
+		$errors = [];
+		$choice = [
+			'pd_default_currency'    => [ 'UGX', 'KES', 'TZS', 'USD' ],
+			'pd_pesapal_environment' => [ 'sandbox', 'production' ],
+			'pd_paypal_environment'  => [ 'sandbox', 'production' ],
+			'pd_paypal_integration'  => [ 'smart_buttons', 'redirect' ],
+			'pd_open_enabled'        => [ '0', '1' ],
+			'pd_remove_data_on_uninstall' => [ '0', '1' ],
 		];
-		$url_fields = [ 'pd_terms_url' ];
+		$text = [
+			'pd_pesapal_consumer_key', 'pd_paypal_client_id', 'pd_email_from_name',
+			'pd_open_title', 'pd_open_label', 'pd_open_amounts',
+		];
+		$emails = [
+			'pd_email_from_address' => __( 'From Email', 'pesa-donations' ),
+			'pd_admin_alert_email'  => __( 'Admin Alerts To', 'pesa-donations' ),
+		];
+		$credentials_before = [ Pesapal_Auth::environment(), get_option( 'pd_pesapal_consumer_key' ), get_option( 'pd_pesapal_consumer_secret' ) ];
 
-		foreach ( $fields as $field ) {
+		foreach ( $choice as $field => $allowed ) {
+			if ( isset( $_POST[ $field ] ) ) {
+				$value = sanitize_text_field( wp_unslash( $_POST[ $field ] ) );
+				if ( in_array( $value, $allowed, true ) ) {
+					update_option( $field, $value );
+				}
+			}
+		}
+		foreach ( $text as $field ) {
+			if ( isset( $_POST[ $field ] ) ) {
+				update_option( $field, trim( sanitize_text_field( wp_unslash( $_POST[ $field ] ) ) ) );
+			}
+		}
+		foreach ( self::SECRETS as $field ) {
+			$value = isset( $_POST[ $field ] ) ? trim( (string) wp_unslash( $_POST[ $field ] ) ) : '';
+			if ( '' !== $value ) {
+				update_option( $field, sanitize_text_field( $value ) );
+			}
+		}
+		foreach ( $emails as $field => $label ) {
 			if ( ! isset( $_POST[ $field ] ) ) {
 				continue;
 			}
-			$raw = wp_unslash( $_POST[ $field ] );
-			if ( in_array( $field, $url_fields, true ) ) {
-				update_option( $field, esc_url_raw( $raw ) );
+			$value = trim( sanitize_text_field( wp_unslash( $_POST[ $field ] ) ) );
+			if ( '' === $value && 'pd_admin_alert_email' === $field ) {
+				update_option( $field, '' ); // Blank: alerts go to the site admin email.
+			} elseif ( is_email( $value ) ) {
+				update_option( $field, sanitize_email( $value ) );
 			} else {
-				update_option( $field, sanitize_text_field( $raw ) );
+				/* translators: %s: field label */
+				$errors[] = sprintf( __( '%s: that is not an email address, so the previous one was kept.', 'pesa-donations' ), $label );
 			}
+		}
+		if ( isset( $_POST['pd_terms_url'] ) ) {
+			update_option( 'pd_terms_url', esc_url_raw( trim( (string) wp_unslash( $_POST['pd_terms_url'] ) ) ) );
+		}
+		if ( isset( $_POST['pd_log_retention_days'] ) ) {
+			update_option( 'pd_log_retention_days', max( 1, min( 3650, absint( $_POST['pd_log_retention_days'] ) ) ) );
+		}
+		if ( isset( $_POST['pd_open_min_amount'] ) ) {
+			$min = trim( (string) wp_unslash( $_POST['pd_open_min_amount'] ) );
+			update_option( 'pd_open_min_amount', is_numeric( $min ) && (float) $min > 0 ? (string) (float) $min : '' );
+		}
+
+		// A cached PesaPal token belongs to the old environment and keys.
+		$credentials_after = [ Pesapal_Auth::environment(), get_option( 'pd_pesapal_consumer_key' ), get_option( 'pd_pesapal_consumer_secret' ) ];
+		if ( $credentials_before !== $credentials_after ) {
+			Pesapal_Auth::clear_token();
 		}
 
 		// Multi-line footer field.
 		if ( isset( $_POST['pd_email_footer'] ) ) {
 			update_option( 'pd_email_footer', wp_kses_post( wp_unslash( $_POST['pd_email_footer'] ) ) );
+		}
+		if ( isset( $_POST['pd_open_intro'] ) ) {
+			update_option( 'pd_open_intro', sanitize_textarea_field( wp_unslash( $_POST['pd_open_intro'] ) ) );
+		}
+
+		// Dashboard address: a slug; a change needs the rewrite rules rebuilt.
+		if ( isset( $_POST['pd_dashboard_slug'] ) ) {
+			$slug     = sanitize_title( wp_unslash( $_POST['pd_dashboard_slug'] ) );
+			$reserved = [ 'wp-admin', 'wp-login', 'wp-json', 'wp-content', 'wp-includes', 'feed', 'page', 'comments', 'search', 'author', 'category', 'tag', 'embed' ];
+			if ( '' !== $slug && \PesaDonations\Modules\Dashboard\Dashboard::slug() !== $slug ) {
+				if ( in_array( $slug, $reserved, true ) || get_page_by_path( $slug ) ) {
+					/* translators: %s: address */
+					$errors[] = sprintf( __( 'Dashboard address: "%s" is already used on this site, so the previous address was kept.', 'pesa-donations' ), $slug );
+				} else {
+					update_option( \PesaDonations\Modules\Dashboard\Dashboard::SLUG_OPTION, $slug );
+					\PesaDonations\Modules\Dashboard\Dashboard::request_flush();
+				}
+			}
 		}
 
 		// Color picker — validate + save hex and alpha.
@@ -793,5 +1001,7 @@ class Settings {
 			$alpha = max( 0, min( 100, (int) $_POST['pd_brand_color_alpha'] ) );
 			update_option( 'pd_brand_color_alpha', $alpha );
 		}
+
+		return $errors;
 	}
 }

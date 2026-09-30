@@ -10,6 +10,7 @@ class Campaign {
 
 	private WP_Post $post;
 	private array $meta = [];
+	private ?Campaign_Schedule $schedule = null;
 
 	public function __construct( WP_Post $post ) {
 		$this->post = $post;
@@ -39,8 +40,12 @@ class Campaign {
 		return get_the_excerpt( $this->post );
 	}
 
+	/** The story, unless the post is password-protected and this visitor has not entered it. */
 	public function get_content(): string {
-		return apply_filters( 'the_content', $this->post->post_content );
+		if ( post_password_required( $this->post ) ) {
+			return '';
+		}
+		return (string) apply_filters( 'the_content', $this->post->post_content );
 	}
 
 	public function get_thumbnail_url( string $size = 'medium' ): string {
@@ -82,7 +87,8 @@ class Campaign {
 		$out = [];
 		foreach ( $ids as $id ) {
 			$thumb = wp_get_attachment_image_url( $id, $size );
-			$full  = wp_get_attachment_image_url( $id, 'full' );
+			// 'large' (1024 px), not the original upload: each swipe is on mobile data.
+			$full  = wp_get_attachment_image_url( $id, 'large' );
 			if ( $thumb && $full ) {
 				$out[] = [
 					'id'    => $id,
@@ -127,24 +133,65 @@ class Campaign {
 		return (string) $this->meta( '_pd_beneficiary_code' );
 	}
 
+	/**
+	 * Plans as {name, amount, currency}, cleaned: a positive number and a
+	 * three-letter currency (the campaign's when absent). Anything else is
+	 * dropped, so a stored value can never reach the page as code.
+	 */
 	public function get_sponsorship_plans(): array {
 		$plans = $this->meta( '_pd_sponsorship_plans' );
 		if ( is_string( $plans ) ) {
 			$plans = json_decode( $plans, true );
 		}
-		return is_array( $plans ) ? $plans : [];
+		$out = [];
+		foreach ( is_array( $plans ) ? $plans : [] as $plan ) {
+			$amount   = is_array( $plan ) && is_numeric( $plan['amount'] ?? null ) ? (float) $plan['amount'] : 0.0;
+			$currency = strtoupper( (string) ( $plan['currency'] ?? '' ) );
+			if ( $amount <= 0 ) {
+				continue;
+			}
+			$out[] = [
+				'name'     => sanitize_text_field( (string) ( $plan['name'] ?? '' ) ),
+				'amount'   => $amount,
+				'currency' => preg_match( '/^[A-Z]{3}$/', $currency ) ? $currency : $this->get_base_currency(),
+			];
+		}
+		return $out;
 	}
 
+	/**
+	 * Quick-pick amounts in the campaign's own currency only: the form always
+	 * submits the base currency, so a "10,000 UGX" button on a USD campaign
+	 * would ask the donor's card for USD 10,000.
+	 */
 	public function get_suggested_amounts(): array {
 		$amounts = $this->meta( '_pd_suggested_amounts' );
 		if ( is_string( $amounts ) ) {
 			$amounts = json_decode( $amounts, true );
 		}
-		return is_array( $amounts ) ? $amounts : [];
+		$base = $this->get_base_currency();
+		$out  = [];
+		foreach ( is_array( $amounts ) ? $amounts : [] as $row ) {
+			$amount   = is_array( $row ) && is_numeric( $row['amount'] ?? null ) ? (float) $row['amount'] : 0.0;
+			$currency = strtoupper( (string) ( $row['currency'] ?? $base ) );
+			if ( $amount > 0 && $currency === $base ) {
+				$out[] = [ 'amount' => $amount, 'currency' => $base ];
+			}
+		}
+		return $out;
 	}
 
+	/**
+	 * Blank (or "0", which 1.1.0 stored for blank) means the site default, and
+	 * that default is set in UGX: it applies to UGX campaigns only. Before, a
+	 * USD campaign with no minimum demanded "5,000 USD".
+	 */
 	public function get_minimum_amount(): float {
-		return (float) ( $this->meta( '_pd_minimum_amount' ) ?: get_option( 'pd_minimum_amount_ugx', 5000 ) );
+		$raw = $this->meta( '_pd_minimum_amount' );
+		if ( is_numeric( $raw ) && (float) $raw > 0 ) {
+			return (float) $raw;
+		}
+		return 'UGX' === $this->get_base_currency() ? (float) get_option( 'pd_minimum_amount_ugx', 5000 ) : 0.0;
 	}
 
 	public function allows_recurring(): bool {
@@ -167,51 +214,153 @@ class Campaign {
 		return (bool) $this->meta( '_pd_show_donor_count' );
 	}
 
+	/**
+	 * What the campaign's checkbox says. The old default for a never-saved
+	 * sponsorship compared the category with "child", which get_category() no
+	 * longer returns, so it was always off; it stays off, matching the editor.
+	 */
 	public function checkout_requires_address(): bool {
-		$val = $this->meta( '_pd_checkout_require_address' );
-		return '' === $val ? ( 'child' === $this->get_category() ) : (bool) $val;
+		return '1' === (string) $this->meta( '_pd_checkout_require_address' );
 	}
 
 	public function is_active(): bool {
 		return 'active' === $this->get_status() && 'publish' === $this->post->post_status;
 	}
 
+	/**
+	 * Whether the checkout may take a donation now. A campaign that reached its
+	 * goal still accepts gifts (the daily job marks it "reached" for display only).
+	 * Closed once the end date has passed or the last custom period is over, even
+	 * before the scheduled job has flipped the status.
+	 */
+	public function accepts_donations(): bool {
+		if ( 'publish' !== $this->post->post_status || ! in_array( $this->get_status(), [ 'active', 'reached' ], true ) ) {
+			return false;
+		}
+		$end = $this->get_end_date();
+		if ( $end && $end < current_time( 'Y-m-d' ) ) {
+			return false;
+		}
+		return ! $this->repeats() || null !== $this->get_current_period();
+	}
+
+	// -------------------------------------------------------------------------
+	// Duration & repeat
+	// -------------------------------------------------------------------------
+
+	public function get_cycle_type(): string {
+		return (string) ( $this->meta( '_pd_cycle_type' ) ?: Campaign_Schedule::ONCE );
+	}
+
+	/** @return array<int, array{id: string, label: string, start: string, end: string}> */
+	public function get_custom_periods(): array {
+		$raw = $this->meta( '_pd_cycle_periods' );
+		if ( is_string( $raw ) ) {
+			$raw = json_decode( $raw, true );
+		}
+		return is_array( $raw ) ? array_values( $raw ) : [];
+	}
+
+	public function get_schedule(): Campaign_Schedule {
+		return $this->schedule ??= new Campaign_Schedule(
+			$this->get_cycle_type(),
+			(string) $this->meta( '_pd_cycle_start' ),
+			$this->get_custom_periods(),
+			(string) $this->meta( '_pd_cycle_since' )
+		);
+	}
+
+	public function repeats(): bool {
+		return $this->get_schedule()->repeats();
+	}
+
+	/**
+	 * The period donations count toward now; null for a one-time campaign, and
+	 * after the campaign's end date (cards showed "November 2026 · Ends 30 Nov"
+	 * with nothing raised on a campaign that had closed).
+	 */
+	public function get_current_period(): ?Campaign_Period {
+		$end = $this->get_end_date();
+		if ( $end && $end < current_time( 'Y-m-d' ) ) {
+			return null;
+		}
+		return $this->get_schedule()->current();
+	}
+
+	/** The period a donation made at $created_at (site time) counted toward. */
+	public function get_period_for_donation( string $created_at ): ?Campaign_Period {
+		if ( ! $this->repeats() || ! preg_match( '/^\d{4}-\d{2}-\d{2}/', $created_at ) ) {
+			return null;
+		}
+		$day = \DateTimeImmutable::createFromFormat( '!Y-m-d', substr( $created_at, 0, 10 ), wp_timezone() );
+		return $day ? $this->get_schedule()->period_for( $day ) : null;
+	}
+
+	public function sends_cycle_reminders(): bool {
+		// Never saved means the admin has not turned it off: on by default.
+		return '0' !== (string) $this->meta( '_pd_cycle_reminders' );
+	}
+
+	/** "Ends 5 Dec 2026", or "Starts 25 May 2026" when the period has not begun. */
+	public function get_period_note(): string {
+		$period = $this->get_current_period();
+		if ( ! $period ) {
+			return '';
+		}
+		if ( ! $period->has_started( $this->get_schedule()->today() ) ) {
+			/* translators: %s: date the period starts */
+			return sprintf( __( 'Starts %s', 'pesa-donations' ), Campaign_Period::format_day( $period->get_start() ) );
+		}
+		/* translators: %s: last day of the period */
+		return sprintf( __( 'Ends %s', 'pesa-donations' ), Campaign_Period::format_day( $period->get_end() ) );
+	}
+
 	// -------------------------------------------------------------------------
 	// Aggregates (cached)
 	// -------------------------------------------------------------------------
 
+	/** Raised in the current period for a repeating campaign, all time otherwise. */
 	public function get_raised_amount(): float {
-		$transient = 'pd_raised_' . $this->get_id();
-		$cached    = get_transient( $transient );
-		if ( false !== $cached ) {
-			return (float) $cached;
-		}
-
-		global $wpdb;
-		$raised = (float) $wpdb->get_var( $wpdb->prepare(
-			"SELECT SUM(amount_base) FROM {$wpdb->prefix}pd_donations WHERE campaign_id = %d AND status = 'completed'",
-			$this->get_id()
-		) );
-
-		set_transient( $transient, $raised, 5 * MINUTE_IN_SECONDS );
-		return $raised;
+		return $this->current_totals()['raised'];
 	}
 
 	public function get_donor_count(): int {
-		$transient = 'pd_donors_' . $this->get_id();
-		$cached    = get_transient( $transient );
-		if ( false !== $cached ) {
-			return (int) $cached;
-		}
+		return $this->current_totals()['donors'];
+	}
 
+	/**
+	 * Completed donations made between two site-time datetimes (inclusive).
+	 * Empty bounds mean unbounded.
+	 *
+	 * @return array{raised: float, donors: int, count: int}
+	 */
+	public function get_totals_between( string $from = '', string $to = '' ): array {
 		global $wpdb;
-		$count = (int) $wpdb->get_var( $wpdb->prepare(
-			"SELECT COUNT(DISTINCT donor_email) FROM {$wpdb->prefix}pd_donations WHERE campaign_id = %d AND status = 'completed'",
-			$this->get_id()
-		) );
+		// Same rule as the progress bar: real money, in the campaign's own currency.
+		$sql  = "SELECT COALESCE(SUM(amount_base), 0) AS raised, COUNT(DISTINCT " . Donation::WHO_SQL . ") AS donors, COUNT(*) AS cnt
+				 FROM {$wpdb->prefix}pd_donations
+				 WHERE campaign_id = %d AND currency = %s AND " . Donation::counted_sql();
+		$args = [ $this->get_id(), $this->get_base_currency() ];
+		if ( '' !== $from ) {
+			$sql   .= ' AND created_at >= %s';
+			$args[] = $from;
+		}
+		if ( '' !== $to ) {
+			$sql   .= ' AND created_at <= %s';
+			$args[] = $to;
+		}
+		$row = $wpdb->get_row( $wpdb->prepare( $sql, $args ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
-		set_transient( $transient, $count, 5 * MINUTE_IN_SECONDS );
-		return $count;
+		return [
+			'raised' => (float) ( $row['raised'] ?? 0 ),
+			'donors' => (int) ( $row['donors'] ?? 0 ),
+			'count'  => (int) ( $row['cnt'] ?? 0 ),
+		];
+	}
+
+	/** Current totals from the shared cache (Campaign_Totals), per period. */
+	private function current_totals(): array {
+		return Campaign_Totals::get( $this );
 	}
 
 	public function get_progress_percent(): float {
@@ -241,31 +390,68 @@ class Campaign {
 		return add_query_arg( 'pd_cid', $this->get_id(), get_permalink( $page_id ) );
 	}
 
+	/**
+	 * Card text: the manual excerpt, or the story's first words as plain text.
+	 * Never runs the_content (a story holding a browse shortcode would recurse,
+	 * and forty cards would run every content filter forty times).
+	 */
+	public function get_summary( int $words = 40 ): string {
+		if ( post_password_required( $this->post ) ) {
+			return '';
+		}
+		$text = has_excerpt( $this->post )
+			? $this->post->post_excerpt
+			: wp_strip_all_tags( strip_shortcodes( excerpt_remove_blocks( $this->post->post_content ) ) );
+		return html_entity_decode( wp_trim_words( $text, $words, '…' ), ENT_QUOTES, 'UTF-8' );
+	}
+
+	/**
+	 * What a card and the details header need, as plain text (rendered with
+	 * x-text, so entities are decoded here). The story and the gallery are not
+	 * included: they load when the details open (to_details_array()).
+	 */
 	public function to_json_array(): array {
+		$plain  = static fn( string $s ): string => html_entity_decode( $s, ENT_QUOTES, 'UTF-8' );
+		$show   = $this->show_progress_bar();
+		$period = $this->get_current_period();
 		return [
 			'id'           => $this->get_id(),
-			'title'        => $this->get_title(),
-			'excerpt'      => $this->get_excerpt(),
-			'content'      => $this->get_content(),
+			'title'        => $plain( $this->get_title() ),
+			'display_title' => $plain( ( $this->is_sponsorship() ? $this->get_beneficiary_name() : '' ) ?: $this->get_title() ),
+			'summary'      => $this->get_summary( 11 ),
 			'thumbnail'    => $this->get_thumbnail_url( 'medium_large' ),
 			'thumbnail_lg' => $this->get_thumbnail_url( 'large' ),
 			'category'     => $this->get_category(),
 			'is_sponsorship' => $this->is_sponsorship(),
-			'beneficiary'  => $this->get_beneficiary_name(),
-			'location'     => $this->get_beneficiary_location(),
+			'beneficiary'  => $plain( $this->get_beneficiary_name() ),
+			'location'     => $plain( $this->get_beneficiary_location() ),
 			'birthday'     => $this->get_beneficiary_birthday(),
-			'code'         => $this->get_beneficiary_code(),
-			'plans'        => $this->get_sponsorship_plans(),
+			'code'         => $plain( $this->get_beneficiary_code() ),
 			'currency'     => $this->get_base_currency(),
 			'goal'         => $this->get_goal_amount(),
 			'goal_fmt'     => number_format( $this->get_goal_amount() ),
-			'raised'       => $this->get_raised_amount(),
-			'raised_fmt'   => number_format( $this->get_raised_amount() ),
-			'donors'       => $this->get_donor_count(),
-			'progress'     => $this->get_progress_percent(),
-			'show_bar'     => $this->show_progress_bar(),
-			'gallery'      => $this->get_gallery_images( 'medium' ),
+			// Totals are published only where the campaign shows its progress.
+			'raised'       => $show ? $this->get_raised_amount() : null,
+			'raised_fmt'   => $show ? number_format( $this->get_raised_amount() ) : '',
+			'progress'     => $show ? $this->get_progress_percent() : 0,
+			'show_bar'     => $show,
+			// Precomputed: "goal > 0" inside an Alpine attribute is broken by
+			// wptexturize, which block themes run over the whole finished page.
+			'has_progress' => $show && $this->get_goal_amount() > 0,
+			// One bit, for the "Fully funded" filter, without publishing the totals.
+			'funded'       => $this->get_goal_amount() > 0 && $this->get_progress_percent() >= 100,
 			'checkout_url' => $this->get_checkout_url(),
+			'period_label' => $period ? $period->get_label() : '',
+			'period_note'  => $this->get_period_note(),
+		];
+	}
+
+	/** The story (through the_content, as on the campaign's own page) and the gallery. */
+	public function to_details_array(): array {
+		return [
+			'id'      => $this->get_id(),
+			'content' => $this->get_content(),
+			'gallery' => $this->get_gallery_images( 'medium' ),
 		];
 	}
 }

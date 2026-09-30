@@ -5,12 +5,30 @@ namespace PesaDonations\Utils;
 
 class Sanitizer {
 
-	public static function amount( mixed $value ): float {
-		return (float) preg_replace( '/[^0-9.]/', '', (string) $value );
+	/** Currencies whose smallest unit is the whole unit (no cents). */
+	private const ZERO_DECIMAL = [ 'UGX', 'TZS', 'RWF', 'BIF' ];
+
+	/**
+	 * A donation amount, or null when the input is not a plain positive number.
+	 * "50000", "50,000" and "50 000" are read as 50000; "-10", "1.234,50",
+	 * "abc" and zero are refused rather than guessed at. Whole units for UGX
+	 * and TZS; two decimals otherwise. Capped below the DECIMAL(15,2) column.
+	 */
+	public static function amount( mixed $value, string $currency = '' ): ?float {
+		$raw = trim( str_replace( [ ',', ' ', "\xC2\xA0" ], '', (string) $value ) );
+		if ( ! preg_match( '/^\d{1,12}(\.\d{1,2})?$/', $raw ) ) {
+			return null;
+		}
+		$amount = self::is_zero_decimal( $currency ) ? round( (float) $raw ) : round( (float) $raw, 2 );
+		return $amount > 0 ? $amount : null;
+	}
+
+	public static function is_zero_decimal( string $currency ): bool {
+		return in_array( strtoupper( $currency ), self::ZERO_DECIMAL, true );
 	}
 
 	public static function currency( mixed $value ): string {
-		return strtoupper( preg_replace( '/[^A-Za-z]/', '', (string) $value ) );
+		return strtoupper( substr( preg_replace( '/[^A-Za-z]/', '', (string) $value ), 0, 3 ) );
 	}
 
 	public static function gateway( mixed $value ): string {
@@ -20,7 +38,7 @@ class Sanitizer {
 	}
 
 	public static function phone( mixed $value ): string {
-		return preg_replace( '/[^0-9+\-\s]/', '', sanitize_text_field( (string) $value ) );
+		return trim( preg_replace( '/[^0-9+\-\s]/', '', sanitize_text_field( (string) $value ) ) );
 	}
 
 	public static function merchant_reference( string $campaign_id, string $donation_id ): string {

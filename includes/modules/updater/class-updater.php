@@ -21,7 +21,11 @@ class Updater {
 	private const REPO_URL = 'https://github.com/RealAkram20/PesaDonations';
 
 	public function register(): void {
-		add_action( 'init', [ $this, 'boot' ] );
+		// Updates are checked and installed in wp-admin, by WP-Cron and by WP-CLI;
+		// a visitor's page view has no use for the update checker.
+		if ( is_admin() || wp_doing_cron() || ( defined( 'WP_CLI' ) && WP_CLI ) ) {
+			add_action( 'init', [ $this, 'boot' ] );
+		}
 	}
 
 	public function boot(): void {
@@ -48,7 +52,9 @@ class Updater {
 		// the auto-generated tag source archive otherwise.
 		$vcsApi = $updater->getVcsApi();
 		if ( method_exists( $vcsApi, 'enableReleaseAssets' ) ) {
-			$vcsApi->enableReleaseAssets();
+			// Only a .zip asset: a checksum or screenshot attached first would be
+			// downloaded as "the plugin" and fail on every site.
+			$vcsApi->enableReleaseAssets( '/\.zip($|[?&#])/i' );
 		}
 	}
 }
