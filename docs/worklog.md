@@ -259,3 +259,17 @@ role, pages 200, assets resolve, forms styled, no plugin lines in the PHP log.
 
 **Rio to decide** (in `D:\OS\decisions\log.md`): sponsorship plan tiers (off; one filter turns them on); children's
 birthdays in public page data; erasure of a donor; minimums per currency; the PayPal tab with no gateway behind it.
+
+### 2026-09-30 — Committed and pushed to branch `1.2.0`; plugin zip built
+
+**Status:** done
+- Rio: "commit to github and also and give me the updated plugin".
+- Commit `68c8988` on a new branch `1.2.0`, pushed. `main` untouched (still v1.1.0); no tag, no release, so the
+  updater keeps client sites on v1.1.0 (with no GitHub release it reads the latest tag).
+- Zip: `D:\PesaDonations-builds\pesa-donations-1.2.0.zip` (`git archive --prefix=pesa-donations/`, 99 files, no
+  `docs/`, `tests/` or `CLAUDE.md`); identical to the copy tested on the Local site, 89 PHP files lint clean.
+- **Found:** remote branch `audit-fixes-1.1.0` (Rio, 26 Apr 2026, three commits: a 31-issue security audit, the
+  newsletter opt-in, a donations rework with a lead form and "live-site audit fixes"), never merged into `main`,
+  29 files overlapping this work with different designs (percent-based plans, organisation columns, a privacy class,
+  a single-donation template). Not merged, not touched. Which branch production runs, and how to reconcile, is Rio's.
+
