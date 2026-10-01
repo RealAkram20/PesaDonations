@@ -10,13 +10,14 @@ class Pesapal_API {
 	/**
 	 * Makes an authenticated request to the PesaPal API.
 	 *
-	 * @param string $method  HTTP method (GET, POST, etc.)
-	 * @param string $path    API path starting with /api/...
-	 * @param array  $body    Request body for POST/PUT. Ignored for GET.
-	 * @param array  $query   Query string parameters (for GET or appended to URL).
-	 * @return array|null     Decoded JSON response, or null on failure.
+	 * @param string $method      HTTP method (GET, POST, etc.)
+	 * @param string $path        API path starting with /api/...
+	 * @param array  $body        Request body for POST/PUT. Ignored for GET.
+	 * @param array  $query       Query string parameters (for GET or appended to URL).
+	 * @param int    $donation_id Recorded on the gateway log row, so a donation's history can be found.
+	 * @return array|null         Decoded JSON response, or null on failure.
 	 */
-	public static function request( string $method, string $path, array $body = [], array $query = [] ): ?array {
+	public static function request( string $method, string $path, array $body = [], array $query = [], int $donation_id = 0 ): ?array {
 		$token = Pesapal_Auth::get_token();
 		if ( ! $token ) {
 			return null;
@@ -34,7 +35,9 @@ class Pesapal_API {
 				'Content-Type'  => 'application/json',
 				'Authorization' => 'Bearer ' . $token,
 			],
-			'timeout' => 30,
+			// Up to three calls chain in one checkout (token, IPN registration, order),
+			// so each is bounded well below PHP's usual 30 s request limit.
+			'timeout' => 15,
 		];
 
 		if ( in_array( $args['method'], [ 'POST', 'PUT', 'PATCH' ], true ) && $body ) {
@@ -44,11 +47,12 @@ class Pesapal_API {
 		$response = wp_remote_request( $url, $args );
 
 		$log_row = [
-			'gateway'      => 'pesapal',
-			'direction'    => 'outgoing',
-			'endpoint'     => $path,
-			'request_body' => $args['body'] ?? '',
-			'created_at'   => current_time( 'mysql' ),
+			'gateway'             => 'pesapal',
+			'direction'           => 'outgoing',
+			'endpoint'            => substr( $path . ( $query ? '?' . http_build_query( $query ) : '' ), 0, 255 ),
+			'request_body'        => $body ? wp_json_encode( self::redact( $body ) ) : '',
+			'related_donation_id' => $donation_id ?: null,
+			'created_at'          => current_time( 'mysql' ),
 		];
 
 		if ( is_wp_error( $response ) ) {
@@ -63,11 +67,11 @@ class Pesapal_API {
 		$decoded = json_decode( $raw, true );
 
 		$log_row['http_status']   = $status;
-		$log_row['response_body'] = $raw;
+		$log_row['response_body'] = is_array( $decoded ) ? wp_json_encode( self::redact( $decoded ) ) : substr( $raw, 0, 2000 );
 		self::log( $log_row );
 
 		if ( $status >= 400 ) {
-			Logger::error( 'PesaPal API ' . $status, [ 'path' => $path, 'response' => $decoded ] );
+			Logger::error( 'PesaPal API ' . $status, [ 'path' => $path ] );
 
 			// Token may have expired — clear and let next call refresh.
 			if ( 401 === $status ) {
@@ -76,6 +80,21 @@ class Pesapal_API {
 		}
 
 		return is_array( $decoded ) ? $decoded : null;
+	}
+
+	/**
+	 * Gateway logs keep what explains a payment, not who made it: the
+	 * donor's name, email, phone and payment account are masked.
+	 */
+	private static function redact( array $data ): array {
+		foreach ( $data as $key => $value ) {
+			if ( is_array( $value ) ) {
+				$data[ $key ] = self::redact( $value );
+			} elseif ( in_array( $key, [ 'email_address', 'phone_number', 'first_name', 'middle_name', 'last_name', 'payment_account', 'line_1', 'line_2', 'postal_code' ], true ) && '' !== (string) $value ) {
+				$data[ $key ] = '***';
+			}
+		}
+		return $data;
 	}
 
 	private static function log( array $row ): void {

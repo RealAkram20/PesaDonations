@@ -6,20 +6,13 @@ namespace PesaDonations\Core;
 class Deactivator {
 
 	public static function deactivate(): void {
-		flush_rewrite_rules();
+		// Rebuilt on the next request without this plugin's rules. flush_rewrite_rules()
+		// here would store them again: the plugin is still loaded while it deactivates.
+		delete_option( 'rewrite_rules' );
 
-		// Clear all scheduled PesaDonations cron events.
-		$hooks = [
-			'pd_daily_fx_rates',
-			'pd_purge_gateway_logs',
-			'pd_daily_campaign_status',
-		];
-
-		foreach ( $hooks as $hook ) {
-			$timestamp = wp_next_scheduled( $hook );
-			if ( $timestamp ) {
-				wp_unschedule_event( $timestamp, $hook );
-			}
+		// Every scheduled instance, including leftover reminder batches, not only the next one.
+		foreach ( Installer::cron_hooks() as $hook ) {
+			wp_clear_scheduled_hook( $hook );
 		}
 	}
 }

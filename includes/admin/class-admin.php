@@ -13,14 +13,15 @@ class Admin {
 	}
 
 	public function enqueue_assets( string $hook ): void {
-		$screens = [
-			'toplevel_page_pesa-donations',
-			'pd-campaigns_page_pd-donations',
-			'pd-campaigns_page_pd-settings',
-			'pd-campaigns_page_pd-system-status',
-		];
+		// By page slug: a submenu's hook name starts with the translated menu
+		// title ("donations_page_…"), and the list here named hooks that never
+		// existed, so these files loaded on none of the plugin's own screens.
+		$page    = isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$ours    = 'pesa-donations' === $page || str_starts_with( $page, 'pd-' );
+		$screen  = get_current_screen();
+		$is_cpt  = $screen && 'pd_campaign' === $screen->post_type;
 
-		if ( ! in_array( $hook, $screens, true ) && 'pd_campaign' !== get_post_type() ) {
+		if ( ! $ours && ! $is_cpt ) {
 			return;
 		}
 

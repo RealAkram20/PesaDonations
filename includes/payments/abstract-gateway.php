@@ -10,7 +10,8 @@ abstract class Abstract_Gateway {
 	abstract public function get_id(): string;
 	abstract public function get_name(): string;
 	abstract public function supports_currency( string $currency ): bool;
-	abstract public function init_donation( Donation $donation, array $donor_data ): array;
+	/** @return array|\WP_Error The redirect data, or why the gateway refused. */
+	abstract public function init_donation( Donation $donation, array $donor_data ): array|\WP_Error;
 
 	public function is_enabled(): bool {
 		return (bool) get_option( 'pd_gateway_' . $this->get_id() . '_enabled', true );

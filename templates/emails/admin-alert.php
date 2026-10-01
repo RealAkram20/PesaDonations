@@ -7,10 +7,16 @@ declare( strict_types=1 );
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 /** @var \PesaDonations\Models\Donation $donation */
-/** @var \PesaDonations\Models\Campaign $campaign */
+/** @var \PesaDonations\Models\Campaign|null $campaign Null for an open donation. */
 
-$campaign_name = $campaign->get_beneficiary_name() ?: $campaign->get_title();
-$amount_text   = number_format( $donation->get_amount(), 2 ) . ' ' . esc_html( $donation->get_currency() );
+$campaign_name = $campaign
+	? ( $campaign->get_beneficiary_name() ?: $campaign->get_title() )
+	: \PesaDonations\Models\Open_Donation::label();
+$period        = $campaign ? $campaign->get_period_for_donation( $donation->get_created_at() ) : null;
+if ( $period ) {
+	$campaign_name .= ' — ' . $period->get_label();
+}
+$amount_text   = \PesaDonations\Utils\Money::format( $donation->get_amount(), $donation->get_currency() ); // Escaped where printed.
 $donor_name    = $donation->get_donor_name() ?: __( '(no name)', 'pesa-donations' );
 $donor_email   = $donation->get_donor_email() ?: __( '(no email)', 'pesa-donations' );
 $edit_url      = admin_url( 'admin.php?page=pd-donation-edit&id=' . $donation->get_id() );

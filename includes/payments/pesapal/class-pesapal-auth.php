@@ -7,24 +7,31 @@ use PesaDonations\Utils\Logger;
 
 class Pesapal_Auth {
 
-	private const TRANSIENT = 'pd_pesapal_token';
-	private const TTL       = 4 * MINUTE_IN_SECONDS;
+	private const TTL = 4 * MINUTE_IN_SECONDS;
 
 	public static function get_token(): string {
-		$cached = get_transient( self::TRANSIENT );
+		$cached = get_transient( self::transient() );
 		if ( is_string( $cached ) && '' !== $cached ) {
 			return $cached;
 		}
 
 		$token = self::request_token();
 		if ( $token ) {
-			set_transient( self::TRANSIENT, $token, self::TTL );
+			set_transient( self::transient(), $token, self::TTL );
 		}
 		return $token;
 	}
 
 	public static function clear_token(): void {
-		delete_transient( self::TRANSIENT );
+		delete_transient( self::transient() );
+	}
+
+	/**
+	 * Keyed by environment and consumer key: a token issued for the sandbox,
+	 * or for another merchant's keys, is never sent after a settings change.
+	 */
+	private static function transient(): string {
+		return 'pd_pesapal_token_' . substr( md5( self::environment() . '|' . get_option( 'pd_pesapal_consumer_key' ) ), 0, 12 );
 	}
 
 	private static function request_token(): string {
@@ -47,7 +54,7 @@ class Pesapal_Auth {
 				'consumer_key'    => $key,
 				'consumer_secret' => $secret,
 			] ),
-			'timeout' => 20,
+			'timeout' => 15,
 		] );
 
 		if ( is_wp_error( $response ) ) {
@@ -57,16 +64,19 @@ class Pesapal_Auth {
 
 		$body = json_decode( wp_remote_retrieve_body( $response ), true );
 		if ( ! is_array( $body ) || empty( $body['token'] ) ) {
-			Logger::error( 'PesaPal auth returned no token', [ 'body' => $body ] );
+			Logger::error( 'PesaPal auth returned no token', [ 'http' => wp_remote_retrieve_response_code( $response ) ] );
 			return '';
 		}
 
 		return (string) $body['token'];
 	}
 
+	public static function environment(): string {
+		return 'production' === get_option( 'pd_pesapal_environment', 'sandbox' ) ? 'production' : 'sandbox';
+	}
+
 	public static function base_url(): string {
-		$env = get_option( 'pd_pesapal_environment', 'sandbox' );
-		return 'production' === $env
+		return 'production' === self::environment()
 			? 'https://pay.pesapal.com/v3'
 			: 'https://cybqa.pesapal.com/pesapalv3';
 	}

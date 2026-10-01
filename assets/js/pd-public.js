@@ -1,52 +1,143 @@
 /**
  * PesaDonations Alpine.js components.
- * Requires Alpine.js v3 (assets/js/alpine.min.js).
+ * Requires Alpine.js v3 (assets/js/alpine.min.js), which loads after this file.
  */
 
 /* =========================================================================
-   Campaign List — unified component for sponsorships AND projects.
-   Handles: details modal, gallery lightbox.
-   Usage: x-data="pdCampaignList(jsonData)"
+   Shared helpers
    =========================================================================*/
-function pdCampaignList(campaignsJson) {
-	return {
-		campaigns:    [],
-		modalOpen:    false,
-		active:       null,
 
-		// Lightbox state
+/** Copies properties with their getters intact (Object.assign would freeze a getter into a value). */
+function pdMix(target, ...sources) {
+	sources.forEach(s => Object.defineProperties(target, Object.getOwnPropertyDescriptors(s)));
+	return target;
+}
+
+/** The { config, items } a shortcode prints in a JSON script block inside the component. */
+function pdReadData(root) {
+	const el = root && root.querySelector(':scope > script.pd-data');
+	if (!el) return {};
+	try { return JSON.parse(el.textContent) || {}; } catch (e) { return {}; }
+}
+
+/** Story and gallery per campaign, fetched once per page view. A failed request may be retried. */
+const pdDetailsRequests = {};
+function pdFetchDetails(ajaxUrl, id) {
+	if (!pdDetailsRequests[id]) {
+		const url = ajaxUrl + (ajaxUrl.indexOf('?') === -1 ? '?' : '&') + 'action=pd_campaign_details&id=' + encodeURIComponent(id);
+		pdDetailsRequests[id] = fetch(url, { credentials: 'same-origin' })
+			.then(res => res.json())
+			.then(json => {
+				if (!json || !json.success || !json.data) throw new Error('pd_campaign_details');
+				return { content: json.data.content || '', gallery: Array.isArray(json.data.gallery) ? json.data.gallery : [] };
+			});
+		pdDetailsRequests[id].catch(() => { delete pdDetailsRequests[id]; });
+	}
+	return pdDetailsRequests[id];
+}
+
+/** Digits and one decimal point: "50,000" and "50 000" read as 50000. NaN when it is not a number. */
+function pdNumber(value) {
+	const raw = String(value === null || value === undefined ? '' : value).replace(/[\s, ]/g, '');
+	return /^\d+(\.\d+)?$/.test(raw) ? parseFloat(raw) : NaN;
+}
+
+/* =========================================================================
+   Details modal + gallery lightbox, shared by the browse pages and sliders.
+   The card's own data shows at once; the story and gallery follow.
+   =========================================================================*/
+function pdDetails() {
+	let lastFocus = null;
+
+	return {
+		campaigns:      [],
+		ajaxUrl:        '',
+		modalOpen:      false,
+		active:         null,
+		detailsLoading: false,
+		detailsFailed:  false,
 		lightboxOpen:   false,
 		lightboxIndex:  0,
 
-		init() {
-			try {
-				this.campaigns = typeof campaignsJson === 'string'
-					? JSON.parse(campaignsJson)
-					: campaignsJson;
-			} catch (e) {
-				this.campaigns = [];
-			}
-		},
-
-		openDetails(data) {
-			try {
-				this.active = typeof data === 'string' ? JSON.parse(data) : data;
-			} catch (e) {
-				this.active = data;
-			}
+		openDetails(id) {
+			const card = this.campaigns.find(c => c.id === id);
+			if (!card) return;
+			lastFocus   = document.activeElement;
+			this.active = Object.assign({ content: '', gallery: [] }, card);
 			this.modalOpen = true;
 			document.body.style.overflow = 'hidden';
+			this.onDetailsOpen();
+			this.loadDetails(id);
+			this.$nextTick(() => {
+				const close = this.$root.querySelector('.pd-modal__close');
+				if (close) close.focus();
+			});
+		},
+
+		loadDetails(id) {
+			this.detailsLoading = true;
+			this.detailsFailed  = false;
+			pdFetchDetails(this.ajaxUrl, id).then(
+				d => {
+					if (!this.modalOpen || !this.active || this.active.id !== id) return;
+					this.active.content = d.content;
+					this.active.gallery = d.gallery;
+					this.detailsLoading = false;
+				},
+				() => {
+					if (!this.modalOpen || !this.active || this.active.id !== id) return;
+					this.detailsLoading = false;
+					this.detailsFailed  = true;
+				}
+			);
+		},
+
+		retryDetails() {
+			if (this.active) this.loadDetails(this.active.id);
 		},
 
 		closeModal() {
-			this.modalOpen = false;
-			this.active    = null;
+			this.modalOpen      = false;
+			this.lightboxOpen   = false;
+			// The card data stays (nulling it made the nested progress block's
+			// bindings throw before Alpine removed it). Emptying the story stops
+			// an embedded video from playing on behind the closed modal.
+			if (this.active) {
+				this.active.content = '';
+				this.active.gallery = [];
+			}
+			this.detailsLoading = false;
+			this.detailsFailed  = false;
 			document.body.style.overflow = '';
+			this.onDetailsClose();
+			if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
+			lastFocus = null;
 		},
 
-		// --- Gallery lightbox ---
+		onEscape() {
+			if (this.lightboxOpen) this.closeLightbox();
+			else if (this.modalOpen) this.closeModal();
+		},
+
+		// Hooks for a component that must react (the slider pauses its autoplay).
+		onDetailsOpen()  {},
+		onDetailsClose() {},
+
+		/* ---- Gallery lightbox ------------------------------------------- */
+		get lightboxImages() {
+			return (this.active && Array.isArray(this.active.gallery)) ? this.active.gallery : [];
+		},
+		get lightboxTotal() { return this.lightboxImages.length; },
+		get lightboxImage() {
+			const img = this.lightboxImages[this.lightboxIndex];
+			return img ? img.full : '';
+		},
+		get lightboxAlt() {
+			const img = this.lightboxImages[this.lightboxIndex];
+			return img ? (img.alt || '') : '';
+		},
 		openLightbox(index) {
-			if (!this.active || !this.active.gallery) return;
+			if (!this.lightboxTotal) return;
 			this.lightboxIndex = index;
 			this.lightboxOpen  = true;
 		},
@@ -54,13 +145,13 @@ function pdCampaignList(campaignsJson) {
 			this.lightboxOpen = false;
 		},
 		lightboxNext() {
-			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
-			this.lightboxIndex = (this.lightboxIndex + 1) % this.active.gallery.length;
+			if (!this.lightboxTotal) return;
+			this.lightboxIndex = (this.lightboxIndex + 1) % this.lightboxTotal;
 			this.scrollActiveThumbIntoView();
 		},
 		lightboxPrev() {
-			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
-			this.lightboxIndex = (this.lightboxIndex - 1 + this.active.gallery.length) % this.active.gallery.length;
+			if (!this.lightboxTotal) return;
+			this.lightboxIndex = (this.lightboxIndex - 1 + this.lightboxTotal) % this.lightboxTotal;
 			this.scrollActiveThumbIntoView();
 		},
 		scrollActiveThumbIntoView() {
@@ -71,48 +162,24 @@ function pdCampaignList(campaignsJson) {
 				if (active) active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
 			});
 		},
-		get lightboxImage() {
-			if (!this.active || !this.active.gallery || !this.active.gallery[this.lightboxIndex]) return '';
-			return this.active.gallery[this.lightboxIndex].full;
-		},
-		get lightboxTotal() {
-			return (this.active && this.active.gallery) ? this.active.gallery.length : 0;
-		},
 	};
-}
-
-// Alias for backward compat with any pages still using the old name.
-function pdSponsorshipList(campaignsJson) {
-	return pdCampaignList(campaignsJson);
 }
 
 /* =========================================================================
    Browse Page — sidebar filters, toolbar, grid/list, pagination.
-   Standalone: embeds the same details-modal + lightbox logic as pdCampaignList
-   (duplicated inline so Alpine picks up reactive getters — Object.assign
-   flattens getters into data properties, breaking reactivity).
-   Usage: x-data="pdBrowse(campaignsJson, configJson)"
+   Usage: x-data="pdBrowse()" with a script.pd-data block inside.
    =========================================================================*/
-function pdBrowse(campaignsJson, configJson) {
-	const cfg = typeof configJson === 'string' ? JSON.parse(configJson) : configJson;
-
-	return {
-		/* ---- Campaign data (from pdCampaignList) --------------------- */
-		campaigns:    [],
-		modalOpen:    false,
-		active:       null,
-		lightboxOpen:   false,
-		lightboxIndex:  0,
-
-		/* ---- Browse config + state ----------------------------------- */
-		type:         cfg.type || 'project',
-		columns:      cfg.columns || 3,
-		i18n:         cfg.i18n || {},
-		view:         'grid',
-		sort:         'default',
-		perPage:      cfg.perPage || 12,
-		page:         1,
-		filtersOpen:  false,  // mobile drawer state
+function pdBrowse() {
+	return pdMix(pdDetails(), {
+		type:        'project',
+		columns:     3,
+		i18n:        {},
+		sortLabels:  {},
+		view:        'grid',
+		sort:        'default',
+		perPage:     12,
+		page:        1,
+		filtersOpen: false,  // mobile drawer state
 		filters: {
 			search:    '',
 			ageRange:  [],
@@ -120,35 +187,41 @@ function pdBrowse(campaignsJson, configJson) {
 			goalRange: [],
 		},
 
-		/* ---- Init ---------------------------------------------------- */
 		init() {
-			try {
-				this.campaigns = typeof campaignsJson === 'string'
-					? JSON.parse(campaignsJson)
-					: campaignsJson;
-			} catch (e) {
-				this.campaigns = [];
-			}
+			const data = pdReadData(this.$el);
+			const cfg  = data.config || {};
+			this.campaigns  = Array.isArray(data.items) ? data.items : [];
+			this.type       = cfg.type || 'project';
+			this.i18n       = cfg.i18n || {};
+			this.sortLabels = cfg.sortLabels || {};
+			this.perPage    = parseInt(cfg.perPage, 10) || 12;
+			this.columns    = parseInt(cfg.columns, 10) || 3;
+			this.ajaxUrl    = cfg.ajaxUrl || '';
+
+			// A narrower result set must not leave the visitor on a page past its
+			// end, which showed "No results" while results existed.
+			this.$watch('filters', () => { this.page = 1; });
+			this.$watch('sort',    () => { this.page = 1; });
+			this.$watch('perPage', () => { this.page = 1; });
 		},
 
 		/* ---- Computed (reactive) ------------------------------------ */
-		get isGridView() { return this.view === 'grid'; },
-		get isListView() { return this.view === 'list'; },
-		get showGrid()   { return this.paginated.length > 0 && this.view === 'grid'; },
-		get showList()   { return this.paginated.length > 0 && this.view === 'list'; },
-		get showEmpty()  { return this.paginated.length === 0; },
+		get isGridView()    { return this.view === 'grid'; },
+		get isListView()    { return this.view === 'list'; },
+		get showGrid()      { return this.paginated.length > 0 && this.view === 'grid'; },
+		get showList()      { return this.paginated.length > 0 && this.view === 'list'; },
+		get showEmpty()     { return this.paginated.length === 0; },
 		get showPaginator() { return this.totalPages > 1; },
+		get currentPage()   { return Math.min(Math.max(1, this.page), this.totalPages); },
+		get onFirstPage()   { return this.currentPage === 1; },
+		get onLastPage()    { return this.currentPage === this.totalPages; },
 
 		get hasActiveFilters() {
-			return this.filters.search.trim() !== ''
-				|| this.filters.ageRange.length > 0
-				|| this.filters.status.length > 0
-				|| this.filters.goalRange.length > 0;
+			return this.activeFilterCount > 0;
 		},
 
 		get activeFilterCount() {
-			let n = 0;
-			if (this.filters.search.trim() !== '') n++;
+			let n = this.filters.search.trim() !== '' ? 1 : 0;
 			n += this.filters.ageRange.length;
 			n += this.filters.status.length;
 			n += this.filters.goalRange.length;
@@ -156,19 +229,7 @@ function pdBrowse(campaignsJson, configJson) {
 		},
 
 		get sortLabel() {
-			const labels = {
-				'default':       'Default',
-				'recent':        'Recently Added',
-				'name_asc':      'Name: A → Z',
-				'name_desc':     'Name: Z → A',
-				'age_asc':       'Age: Young → Old',
-				'age_desc':      'Age: Old → Young',
-				'progress_desc': 'Progress: High → Low',
-				'progress_asc':  'Progress: Low → High',
-				'goal_desc':     'Goal: High → Low',
-				'goal_asc':      'Goal: Low → High',
-			};
-			return labels[this.sort] || 'Default';
+			return this.sortLabels[this.sort] || this.sortLabels['default'] || '';
 		},
 
 		get filtered() {
@@ -186,11 +247,10 @@ function pdBrowse(campaignsJson, configJson) {
 					if (!f.ageRange.some(r => this.ageInRange(c.age, r))) return false;
 				}
 				if (f.status.length) {
-					const isFunded   = c.progress >= 100;
 					const wantAvail  = f.status.includes('available');
 					const wantFunded = f.status.includes('funded');
-					if (wantAvail && !wantFunded && isFunded)   return false;
-					if (wantFunded && !wantAvail && !isFunded)  return false;
+					if (wantAvail && !wantFunded && c.funded)  return false;
+					if (wantFunded && !wantAvail && !c.funded) return false;
 				}
 				if (f.goalRange.length && this.type === 'project') {
 					if (!f.goalRange.some(r => this.goalInRange(c.goal, r))) return false;
@@ -202,12 +262,20 @@ function pdBrowse(campaignsJson, configJson) {
 		},
 
 		get paginated() {
-			const start = (this.page - 1) * this.perPage;
+			const start = (this.currentPage - 1) * this.perPage;
 			return this.filtered.slice(start, start + this.perPage);
 		},
 
 		get totalPages() {
 			return Math.max(1, Math.ceil(this.filtered.length / this.perPage));
+		},
+
+		goToPage(p) {
+			this.page = Math.min(Math.max(1, p), this.totalPages);
+			this.$nextTick(() => {
+				const top = this.$root.getBoundingClientRect().top;
+				if (top < 0) this.$root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+			});
 		},
 
 		/* ---- Filters helpers ---------------------------------------- */
@@ -237,121 +305,66 @@ function pdBrowse(campaignsJson, configJson) {
 
 		applySort(list) {
 			const copy   = [...list];
-			const nameOf = c => (c.beneficiary || c.title || '').toLowerCase();
+			const nameOf = c => (c.display_title || c.title || '').toLowerCase();
 			const ageOf  = c => (c.age === '' ? 999 : parseInt(c.age, 10));
 			const goalOf = c => parseFloat(c.goal) || 0;
 			const progOf = c => parseFloat(c.progress) || 0;
 
 			switch (this.sort) {
-				case 'name_asc':      copy.sort((a,b) => nameOf(a).localeCompare(nameOf(b))); break;
-				case 'name_desc':     copy.sort((a,b) => nameOf(b).localeCompare(nameOf(a))); break;
-				case 'age_asc':       copy.sort((a,b) => ageOf(a) - ageOf(b)); break;
-				case 'age_desc':      copy.sort((a,b) => ageOf(b) - ageOf(a)); break;
-				case 'progress_desc': copy.sort((a,b) => progOf(b) - progOf(a)); break;
-				case 'progress_asc':  copy.sort((a,b) => progOf(a) - progOf(b)); break;
-				case 'goal_desc':     copy.sort((a,b) => goalOf(b) - goalOf(a)); break;
-				case 'goal_asc':      copy.sort((a,b) => goalOf(a) - goalOf(b)); break;
-				case 'recent':        copy.sort((a,b) => b.id - a.id); break;
+				case 'name_asc':      copy.sort((a, b) => nameOf(a).localeCompare(nameOf(b))); break;
+				case 'name_desc':     copy.sort((a, b) => nameOf(b).localeCompare(nameOf(a))); break;
+				case 'age_asc':       copy.sort((a, b) => ageOf(a) - ageOf(b)); break;
+				case 'age_desc':      copy.sort((a, b) => ageOf(b) - ageOf(a)); break;
+				case 'progress_desc': copy.sort((a, b) => progOf(b) - progOf(a)); break;
+				case 'progress_asc':  copy.sort((a, b) => progOf(a) - progOf(b)); break;
+				case 'goal_desc':     copy.sort((a, b) => goalOf(b) - goalOf(a)); break;
+				case 'goal_asc':      copy.sort((a, b) => goalOf(a) - goalOf(b)); break;
+				case 'recent':        copy.sort((a, b) => b.id - a.id); break;
 			}
 			return copy;
 		},
 
 		resetFilters() {
 			this.filters = { search: '', ageRange: [], status: [], goalRange: [] };
-			this.page    = 1;
 		},
 
 		setView(grid) {
 			this.view = grid ? 'grid' : 'list';
 		},
 
-		/* ---- Details modal (same as pdCampaignList) ----------------- */
-		openDetails(data) {
-			try {
-				this.active = typeof data === 'string' ? JSON.parse(data) : data;
-			} catch (e) {
-				this.active = data;
-			}
-			this.modalOpen = true;
-			document.body.style.overflow = 'hidden';
+		/** The first row is on screen at load: fetch it at once, lazy-load the rest. */
+		imageLoading(i) {
+			return i < this.columns ? 'eager' : 'lazy';
 		},
-		closeModal() {
-			this.modalOpen = false;
-			this.active    = null;
-			document.body.style.overflow = '';
-		},
-
-		/* ---- Lightbox ----------------------------------------------- */
-		openLightbox(index) {
-			if (!this.active || !this.active.gallery) return;
-			this.lightboxIndex = index;
-			this.lightboxOpen  = true;
-		},
-		closeLightbox() {
-			this.lightboxOpen = false;
-		},
-		lightboxNext() {
-			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
-			this.lightboxIndex = (this.lightboxIndex + 1) % this.active.gallery.length;
-			this.scrollActiveThumbIntoView();
-		},
-		lightboxPrev() {
-			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
-			this.lightboxIndex = (this.lightboxIndex - 1 + this.active.gallery.length) % this.active.gallery.length;
-			this.scrollActiveThumbIntoView();
-		},
-		scrollActiveThumbIntoView() {
-			this.$nextTick(() => {
-				const strip = this.$refs.strip;
-				if (!strip) return;
-				const active = strip.querySelector('.pd-lightbox__thumb--active');
-				if (active) active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
-			});
-		},
-		get lightboxImage() {
-			if (!this.active || !this.active.gallery || !this.active.gallery[this.lightboxIndex]) return '';
-			return this.active.gallery[this.lightboxIndex].full;
-		},
-		get lightboxTotal() {
-			return (this.active && this.active.gallery) ? this.active.gallery.length : 0;
-		},
-	};
+	});
 }
-
-window.pdBrowse = pdBrowse;
 
 /* =========================================================================
    Slider — horizontal carousel with prev/next arrows, optional autoplay.
-   Uses native CSS scroll-snap for smooth scrolling and touch/swipe support.
-   Also includes the full details-modal + gallery-lightbox methods so the
-   "View Details" button on each card works inside the slider scope.
+   Native CSS scroll-snap for smooth scrolling and touch/swipe support.
+   Usage: x-data="pdSlider()" with a script.pd-data block inside.
    =========================================================================*/
-function pdSlider(configJson, campaignsJson) {
-	const cfg = typeof configJson === 'string' ? JSON.parse(configJson) : (configJson || {});
-
-	return {
-		/* ---- SLIDER state (cards carousel) ------------------------- */
-		sliderOn:         !!cfg.autoplay,       // renamed from `autoplay` — "is slider autoplaying?"
-		sliderInterval:   cfg.interval || 4500,
-		sliderTimer:      null,
-		sliderPaused:     false,
-
-		/* ---- Details modal state ---------------------------------- */
-		campaigns:    [],
-		modalOpen:    false,
-		active:       null,
-
-		/* ---- LIGHTBOX state (gallery viewer) ---------------------- */
-		lightboxOpen:     false,
-		lightboxIndex:    0,
+function pdSlider() {
+	return pdMix(pdDetails(), {
+		sliderOn:       false,
+		sliderInterval: 4500,
+		sliderTimer:    null,
+		sliderPaused:   false,
 
 		init() {
-			try {
-				this.campaigns = typeof campaignsJson === 'string'
-					? JSON.parse(campaignsJson)
-					: (campaignsJson || []);
-			} catch (e) { this.campaigns = []; }
+			const data = pdReadData(this.$el);
+			const cfg  = data.config || {};
+			this.campaigns      = Array.isArray(data.items) ? data.items : [];
+			this.ajaxUrl        = cfg.ajaxUrl || '';
+			this.sliderInterval = Math.max(1500, parseInt(cfg.interval, 10) || 4500);
+			// Moving content is not started for a visitor who asked the system for less motion.
+			const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+			this.sliderOn = !!cfg.autoplay && !reduce;
 			if (this.sliderOn) this.startSlider();
+		},
+
+		destroy() {
+			this.stopSlider();
 		},
 
 		/* ---- Slider navigation ------------------------------------- */
@@ -361,7 +374,7 @@ function pdSlider(configJson, campaignsJson) {
 			const slide = track.querySelector('.pd-slider__slide');
 			if (!slide) return track.clientWidth;
 			const style = getComputedStyle(track);
-			const gap   = parseInt(style.gap || style.columnGap || '20', 10) || 0;
+			const gap   = parseInt(style.columnGap || style.gap || '20', 10) || 0;
 			return slide.offsetWidth + gap;
 		},
 
@@ -392,7 +405,7 @@ function pdSlider(configJson, campaignsJson) {
 			if (!this.sliderOn) return;
 			this.stopSlider();
 			this.sliderTimer = setInterval(() => {
-				if (!this.sliderPaused) this.next();
+				if (!this.sliderPaused && !document.hidden) this.next();
 			}, this.sliderInterval);
 		},
 
@@ -403,86 +416,38 @@ function pdSlider(configJson, campaignsJson) {
 			}
 		},
 
-		pauseAutoplay()  { this.sliderPaused = true; },   // keeps name for slider wrapper @mouseenter
-		resumeAutoplay() { this.sliderPaused = false; },  // keeps name for slider wrapper @mouseleave
+		pauseAutoplay()  { this.sliderPaused = true; },
+		resumeAutoplay() { if (!this.modalOpen) this.sliderPaused = false; },
 		resetSlider()    { if (this.sliderOn) this.startSlider(); },
 
-		/* ---- Details modal ----------------------------------------- */
-		openDetails(data) {
-			try { this.active = typeof data === 'string' ? JSON.parse(data) : data; }
-			catch (e) { this.active = data; }
-			this.modalOpen = true;
-			document.body.style.overflow = 'hidden';
-			this.pauseAutoplay();
-		},
-		closeModal() {
-			this.modalOpen = false;
-			this.active    = null;
-			document.body.style.overflow = '';
-			this.resumeAutoplay();
-		},
-
-		/* ---- Gallery lightbox -------------------------------------- */
-		openLightbox(index) {
-			if (!this.active || !this.active.gallery) return;
-			this.lightboxIndex = index;
-			this.lightboxOpen  = true;
-		},
-		closeLightbox() {
-			this.lightboxOpen = false;
-		},
-		lightboxNext() {
-			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
-			this.lightboxIndex = (this.lightboxIndex + 1) % this.active.gallery.length;
-			this.scrollActiveThumbIntoView();
-		},
-		lightboxPrev() {
-			if (!this.active || !this.active.gallery || !this.active.gallery.length) return;
-			this.lightboxIndex = (this.lightboxIndex - 1 + this.active.gallery.length) % this.active.gallery.length;
-			this.scrollActiveThumbIntoView();
-		},
-		scrollActiveThumbIntoView() {
-			this.$nextTick(() => {
-				const strip = this.$refs.strip;
-				if (!strip) return;
-				const active = strip.querySelector('.pd-lightbox__thumb--active');
-				if (active) active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
-			});
-		},
-		get lightboxImage() {
-			if (!this.active || !this.active.gallery || !this.active.gallery[this.lightboxIndex]) return '';
-			return this.active.gallery[this.lightboxIndex].full;
-		},
-		get lightboxTotal() {
-			return (this.active && this.active.gallery) ? this.active.gallery.length : 0;
-		},
-	};
+		onDetailsOpen()  { this.pauseAutoplay(); },
+		onDetailsClose() { this.resumeAutoplay(); },
+	});
 }
-
-window.pdSlider = pdSlider;
 
 /* =========================================================================
    Checkout Form
-   =========================================================================
-   Usage: x-data="pdCheckout(configJson)"
-*/
+   Usage: x-data="pdCheckout(config)"
+   =========================================================================*/
 function pdCheckout(configJson) {
-	const config = typeof configJson === 'string' ? JSON.parse(configJson) : configJson;
+	const config = typeof configJson === 'string' ? JSON.parse(configJson) : (configJson || {});
+	const t      = config.i18n || {};
+	const say    = (key, fallback) => t[key] || fallback;
 
 	return {
 		// Config
 		campaignId:    config.campaignId || 0,
 		currency:      config.currency   || 'UGX',
-		plans:         config.plans      || [],
-		hasPlans:      config.hasPlans   || false,
-		minAmount:     config.minAmount  || 0,
-		requireAddr:   config.requireAddr || false,
+		plans:         Array.isArray(config.plans) ? config.plans : [],
+		hasPlans:      !!config.hasPlans,
+		minAmount:     parseFloat(config.minAmount) || 0,
+		requireAddr:   !!config.requireAddr,
 		nonce:         config.nonce      || '',
 		ajaxUrl:       config.ajaxUrl    || '',
 		thankYouUrl:   config.thankYouUrl || '',
 
 		// State
-		selectedPlan:       null,
+		planIndex:          -1,
 		isOrg:              false,
 		storyOpen:          false,
 		loading:            false,
@@ -494,8 +459,6 @@ function pdCheckout(configJson) {
 		sliderMin:          0,
 		sliderMax:          0,
 		sliderStep:         1,
-		donorRecognized:    false,
-		donorLookupInFlight: false,
 
 		formData: {
 			amount:        '',
@@ -510,33 +473,32 @@ function pdCheckout(configJson) {
 			city:          '',
 			state:         '',
 			zip:           '',
-			billing_same:  true,
 			how_heard:     '',
 			notes:         '',
+			anonymous:     false,
 			updates:       false,
 			agree_terms:   false,
 		},
 
 		init() {
-			if (this.plans.length > 0) {
-				// Seed slider range from defined plan amounts.
-				const amounts = this.plans.map(p => parseFloat(p.amount)).filter(n => !isNaN(n));
-				const min = Math.min(...amounts);
-				const max = Math.max(...amounts);
+			if (!this.hasPlans || !this.plans.length) return;
 
-				if (min === max) {
-					// Single plan: let user slide between ±50% around it.
-					this.sliderMin = Math.max(this.minAmount || 0, Math.round(min * 0.5));
-					this.sliderMax = Math.round(min * 2);
-				} else {
-					this.sliderMin = min;
-					this.sliderMax = max;
-				}
+			// The slider runs between the plans' amounts, in the plans' currency.
+			const amounts = this.plans.map(p => parseFloat(p.amount)).filter(n => !isNaN(n));
+			const min = Math.min(...amounts);
+			const max = Math.max(...amounts);
 
-				this.sliderStep = this.stepForCurrency(this.currency);
-				this.selectedPlan   = this.plans[0];
-				this.formData.amount = this.selectedPlan.amount;
+			if (min === max) {
+				// Single plan: let the donor slide from half of it to double.
+				this.sliderMin = Math.max(this.minAmount || 0, Math.round(min * 0.5));
+				this.sliderMax = Math.round(min * 2);
+			} else {
+				this.sliderMin = min;
+				this.sliderMax = max;
 			}
+
+			this.sliderStep = this.stepForCurrency(this.amountCurrency);
+			this.selectPlan(0);
 		},
 
 		stepForCurrency(code) {
@@ -545,77 +507,61 @@ function pdCheckout(configJson) {
 		},
 
 		formatAmount(n) {
-			if (n === '' || n === null || isNaN(n)) return '0';
-			return Number(n).toLocaleString();
+			const v = pdNumber(n);
+			return isNaN(v) ? '0' : v.toLocaleString();
+		},
+
+		/** The selected plan's currency; otherwise the plans' shared one; otherwise the campaign's. */
+		get amountCurrency() {
+			const plan = this.plans[this.planIndex];
+			if (plan && plan.currency) return plan.currency;
+			const shared = [...new Set(this.plans.map(p => p.currency || this.currency))];
+			return this.hasPlans && shared.length === 1 ? shared[0] : this.currency;
 		},
 
 		get currentPlanName() {
 			if (this.customAmountOpen) return '';
-			const match = this.plans.find(p => parseFloat(p.amount) === parseFloat(this.formData.amount));
-			return match ? (match.name || '') : '';
+			const plan = this.plans[this.planIndex];
+			return plan ? (plan.name || '') : '';
 		},
 
-		selectPlan(plan) {
-			this.selectedPlan     = plan;
+		isPlanActive(i) {
+			return !this.customAmountOpen && this.planIndex === i;
+		},
+
+		selectPlan(i) {
+			const plan = this.plans[i];
+			if (!plan) return;
+			this.planIndex        = i;
 			this.customAmountOpen = false;
 			this.formData.amount  = plan.amount;
 		},
 
 		onSliderChange() {
 			this.customAmountOpen = false;
-			const match = this.plans.find(p => parseFloat(p.amount) === parseFloat(this.formData.amount));
-			this.selectedPlan = match || null;
+			const amount = pdNumber(this.formData.amount);
+			this.planIndex = this.plans.findIndex(p => parseFloat(p.amount) === amount && (p.currency || this.currency) === this.amountCurrency);
 		},
 
 		onCustomChange() {
-			this.selectedPlan = null;
+			this.planIndex = -1;
 		},
 
 		toggleCustom() {
 			this.customAmountOpen = !this.customAmountOpen;
-			if (this.customAmountOpen) {
-				this.selectedPlan = null;
-				// Start custom amount at current slider value.
-			}
+			if (this.customAmountOpen) this.planIndex = -1;
+		},
+
+		setAmount(n) {
+			this.formData.amount = n;
+		},
+
+		isAmount(n) {
+			return pdNumber(this.formData.amount) === n;
 		},
 
 		toggleStory() {
 			this.storyOpen = !this.storyOpen;
-		},
-
-		async lookupDonor() {
-			const email = (this.formData.email || '').trim();
-			const phone = (this.formData.phone || '').trim();
-			if ((!email || !email.includes('@')) && !phone) return;
-			if (this.donorLookupInFlight) return;
-			this.donorLookupInFlight = true;
-
-			try {
-				const body = new FormData();
-				body.append('action', 'pd_lookup_donor');
-				body.append('nonce', this.nonce);
-				if (email) body.append('email', email);
-				if (phone) body.append('phone', phone);
-
-				const res  = await fetch(this.ajaxUrl, { method: 'POST', body });
-				const data = await res.json();
-				if (data.success && data.data) {
-					const d = data.data;
-					// Only fill empty fields — don't overwrite what the user typed.
-					if (!this.formData.first_name && d.first_name) this.formData.first_name = d.first_name;
-					if (!this.formData.last_name  && d.last_name)  this.formData.last_name  = d.last_name;
-					if (!this.formData.phone      && d.phone)      this.formData.phone      = d.phone;
-					if (!this.formData.email      && d.email)      { this.formData.email = d.email; this.formData.confirm_email = d.email; }
-					if (!this.formData.confirm_email && this.formData.email) this.formData.confirm_email = this.formData.email;
-					if (!this.formData.country    && d.country)    this.formData.country    = d.country;
-					this.donorRecognized = true;
-					setTimeout(() => { this.donorRecognized = false; }, 5000);
-				}
-			} catch (e) {
-				/* silent — lookup is a nicety, not critical */
-			} finally {
-				this.donorLookupInFlight = false;
-			}
 		},
 
 		closeIframe() {
@@ -626,85 +572,115 @@ function pdCheckout(configJson) {
 
 		validate() {
 			const errs = {};
+			const f    = this.formData;
+			const amt  = pdNumber(f.amount);
 
-			const amt = parseFloat(this.formData.amount);
-			if (!amt || amt < this.minAmount) {
-				errs.amount = `Minimum donation is ${Number(this.minAmount).toLocaleString()} ${this.currency}.`;
+			if (isNaN(amt) || amt <= 0) {
+				errs.amount = say('amount', 'Enter the amount as a number, for example 50000.');
+			} else if (this.amountCurrency === this.currency && amt < this.minAmount) {
+				// The minimum is set in the campaign's currency and applies only in it (as on the server).
+				errs.amount = say('minimum', 'Minimum donation is %s.')
+					.replace('%s', Number(this.minAmount).toLocaleString() + ' ' + this.currency);
 			}
 
-			if (!this.formData.first_name.trim()) {
-				errs.first_name = pdL10n('First name is required.');
-			}
-			if (!this.formData.last_name.trim()) {
-				errs.last_name = pdL10n('Last name is required.');
-			}
-			if (!this.formData.email.trim() || !this.formData.email.includes('@')) {
-				errs.email = pdL10n('A valid email address is required.');
-			}
-			if (this.formData.email !== this.formData.confirm_email) {
-				errs.confirm_email = pdL10n('Email addresses do not match.');
+			if (!f.first_name.trim()) errs.first_name = say('firstName', 'First name is required.');
+			if (!f.last_name.trim())  errs.last_name  = say('lastName', 'Last name is required.');
+
+			const email = f.email.trim();
+			if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+				errs.email = say('email', 'A valid email address is required.');
+			} else if (email.toLowerCase() !== f.confirm_email.trim().toLowerCase()) {
+				errs.confirm_email = say('emailMatch', 'Email addresses do not match.');
 			}
 
 			if (this.requireAddr) {
-				if (!this.formData.country)  errs.country  = pdL10n('Country is required.');
-				if (!this.formData.address1) errs.address1 = pdL10n('Address is required.');
-				if (!this.formData.city)     errs.city     = pdL10n('City is required.');
-				if (!this.formData.zip)      errs.zip      = pdL10n('Zip/Postal code is required.');
+				if (!f.country)          errs.country  = say('country', 'Country is required.');
+				if (!f.address1.trim())  errs.address1 = say('address', 'Address is required.');
+				if (!f.city.trim())      errs.city     = say('city', 'City is required.');
+				if (!f.zip.trim())       errs.zip      = say('zip', 'Zip/Postal code is required.');
 			}
 
-			if (!this.formData.agree_terms) {
-				errs.agree_terms = pdL10n('You must agree to the terms to continue.');
+			if (!f.agree_terms) {
+				errs.agree_terms = say('terms', 'You must agree to the terms to continue.');
 			}
 
 			this.errors = errs;
 			return Object.keys(errs).length === 0;
 		},
 
+		buildBody() {
+			const f    = this.formData;
+			const body = new FormData();
+			body.append('action',      'pd_init_donation');
+			body.append('nonce',       this.nonce);
+			body.append('campaign_id', this.campaignId);
+			body.append('amount',      String(pdNumber(f.amount)));
+			body.append('currency',    this.amountCurrency);
+			body.append('gateway',     'pesapal');
+			body.append('first_name',  f.first_name.trim());
+			body.append('last_name',   f.last_name.trim());
+			body.append('email',       f.email.trim());
+			body.append('phone',       f.phone.trim());
+			body.append('country',     f.country);
+			body.append('message',     f.notes);
+			body.append('how_heard',   f.how_heard);
+			body.append('updates',     f.updates ? '1' : '');
+			body.append('is_org',      this.isOrg ? '1' : '');
+			body.append('anonymous',   f.anonymous ? '1' : '');
+			if (this.requireAddr) {
+				body.append('address1', f.address1);
+				body.append('address2', f.address2);
+				body.append('city',     f.city);
+				body.append('state',    f.state);
+				body.append('zip',      f.zip);
+			}
+			return body;
+		},
+
+		async post() {
+			const res = await fetch(this.ajaxUrl, { method: 'POST', body: this.buildBody(), credentials: 'same-origin' });
+			return res.json();
+		},
+
+		/**
+		 * The nonce printed in the page lives 12-24 hours; a page cache can serve
+		 * the page for longer. On a nonce refusal, fetch a fresh one (admin-ajax
+		 * is never cached) and send once more.
+		 */
+		async refreshNonce() {
+			const res  = await fetch(this.ajaxUrl + (this.ajaxUrl.indexOf('?') === -1 ? '?' : '&') + 'action=pd_nonce', { credentials: 'same-origin', cache: 'no-store' });
+			const json = await res.json();
+			if (!json || !json.success || !json.data || !json.data.nonce) return false;
+			this.nonce = json.data.nonce;
+			return true;
+		},
+
 		async submit() {
-			console.log('[PesaDonations] submit() called', { formData: this.formData, selectedPlan: this.selectedPlan });
+			if (this.loading) return;
 			this.globalError = '';
 
 			if (!this.validate()) {
-				const errorList = Object.values(this.errors).filter(Boolean);
-				this.globalError = 'Please fix the errors above: ' + errorList.join(' ');
-				console.warn('[PesaDonations] validation failed', this.errors);
+				this.globalError = say('fix', 'Please check the highlighted fields.');
 				this.$nextTick(() => {
-					const el = document.querySelector('.pd-input--error, .pd-error-msg:not(:empty)');
-					if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+					const el = this.$root.querySelector('.pd-input--error');
+					if (el) {
+						el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+						el.focus({ preventScroll: true });
+					}
 				});
 				return;
 			}
 
 			this.loading = true;
 
-			// formData.amount is authoritative: slider, custom input, and plan
-			// buttons all write to it.
-			const amount   = parseFloat(this.formData.amount) || 0;
-			const currency = (this.hasPlans && this.selectedPlan && this.selectedPlan.currency) || this.currency;
-
-			const body = new FormData();
-			body.append('action',      'pd_init_donation');
-			body.append('nonce',       this.nonce);
-			body.append('campaign_id', this.campaignId);
-			body.append('amount',      amount);
-			body.append('currency',    currency);
-			body.append('gateway',     'pesapal');
-			body.append('first_name',  this.formData.first_name);
-			body.append('last_name',   this.formData.last_name);
-			body.append('email',       this.formData.email);
-			body.append('phone',       this.formData.phone);
-			body.append('country',     this.formData.country);
-			body.append('message',     this.formData.notes);
-
 			try {
-				console.log('[PesaDonations] sending AJAX', this.ajaxUrl);
-				const res  = await fetch(this.ajaxUrl, { method: 'POST', body });
-				const data = await res.json();
-				console.log('[PesaDonations] AJAX response', data);
+				let data = await this.post();
+				if (!data.success && data.data && data.data.code === 'nonce' && await this.refreshNonce()) {
+					data = await this.post();
+				}
 
 				if (data.success) {
 					if (data.data && data.data.redirect_url) {
-						console.log('[PesaDonations] opening payment iframe', data.data.redirect_url);
 						this.iframeUrl  = data.data.redirect_url;
 						this.iframeOpen = true;
 						document.body.style.overflow = 'hidden';
@@ -712,12 +688,10 @@ function pdCheckout(configJson) {
 						window.location.href = this.thankYouUrl;
 					}
 				} else {
-					this.globalError = (data.data && data.data.message)
-						|| pdL10n('Something went wrong. Please try again.');
+					this.globalError = (data.data && data.data.message) || say('generic', 'Something went wrong. Please try again.');
 				}
 			} catch (err) {
-				console.error('[PesaDonations] fetch failed', err);
-				this.globalError = pdL10n('Network error. Please check your connection and try again.');
+				this.globalError = say('network', 'Network error. Please check your connection and try again.');
 			} finally {
 				this.loading = false;
 			}
@@ -725,29 +699,16 @@ function pdCheckout(configJson) {
 	};
 }
 
-/* =========================================================================
-   Donate Button (opens checkout via link — no modal needed)
-   =========================================================================*/
+/* 1.1.0's button markup (x-data="pdDonateButton()") can outlive an update in a page cache. */
 function pdDonateButton() {
 	return {};
-}
-
-/* =========================================================================
-   Utility: safe L10n fallback
-   =========================================================================*/
-function pdL10n(str) {
-	return (window.pdPublicStrings && window.pdPublicStrings[str]) || str;
 }
 
 /* =========================================================================
    Expose on window so Alpine's x-data can find them regardless of
    script load order.
    =========================================================================*/
-window.pdCampaignList    = pdCampaignList;
-window.pdSponsorshipList = pdSponsorshipList;
-window.pdCheckout        = pdCheckout;
-window.pdDonateButton    = pdDonateButton;
-
-document.addEventListener('alpine:init', () => {
-	console.log('[PesaDonations] Alpine init — components ready');
-});
+window.pdBrowse       = pdBrowse;
+window.pdSlider       = pdSlider;
+window.pdCheckout     = pdCheckout;
+window.pdDonateButton = pdDonateButton;

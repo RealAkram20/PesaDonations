@@ -3,6 +3,9 @@ declare( strict_types=1 );
 
 namespace PesaDonations\Admin;
 
+use PesaDonations\Models\Donor;
+use PesaDonations\Utils\Money;
+
 if ( ! class_exists( 'WP_List_Table' ) ) {
 	require_once ABSPATH . 'wp-admin/includes/class-wp-list-table.php';
 }
@@ -10,6 +13,9 @@ if ( ! class_exists( 'WP_List_Table' ) ) {
 class Donors_List_Table extends \WP_List_Table {
 
 	private const PER_PAGE = 20;
+
+	/** @var array<int, array<string, float>> donor id => [currency => completed total] */
+	private array $totals = [];
 
 	public function __construct() {
 		parent::__construct( [
@@ -68,7 +74,7 @@ class Donors_List_Table extends \WP_List_Table {
 
 		$view_donations_url = add_query_arg( [
 			'page' => 'pd-donations',
-			's'    => $item['email'],
+			's'    => Donor::is_placeholder_email( (string) $item['email'] ) ? $item['phone'] : $item['email'],
 		], admin_url( 'admin.php' ) );
 
 		$display = trim( ( $item['first_name'] ?? '' ) . ' ' . ( $item['last_name'] ?? '' ) ) ?: __( '(No name)', 'pesa-donations' );
@@ -79,7 +85,7 @@ class Donors_List_Table extends \WP_List_Table {
 			'delete'    => sprintf(
 				'<a href="%s" onclick="return confirm(\'%s\')" style="color:#c62828;">%s</a>',
 				esc_url( $delete_url ),
-				esc_js( __( 'Delete this donor? Their donation records will remain but will no longer be linked.', 'pesa-donations' ) ),
+				esc_js( __( 'Delete this donor? Only donors without donations can be deleted.', 'pesa-donations' ) ),
 				esc_html__( 'Delete', 'pesa-donations' )
 			),
 		];
@@ -93,7 +99,7 @@ class Donors_List_Table extends \WP_List_Table {
 	}
 
 	protected function column_email( $item ): string {
-		if ( empty( $item['email'] ) ) {
+		if ( empty( $item['email'] ) || Donor::is_placeholder_email( (string) $item['email'] ) ) {
 			return '—';
 		}
 		return sprintf(
@@ -116,11 +122,8 @@ class Donors_List_Table extends \WP_List_Table {
 	}
 
 	protected function column_total_donated( $item ): string {
-		$amount = (float) ( $item['total_donated_base'] ?? 0 );
-		return sprintf(
-			'<strong style="color:#c62828;">%s</strong>',
-			esc_html( number_format( $amount, 2 ) )
-		);
+		// Per currency: the stored total adds shillings and dollars together.
+		return '<strong>' . esc_html( Money::format_totals( $this->totals[ (int) $item['id'] ] ?? [] ) ) . '</strong>';
 	}
 
 	protected function column_last_donation_at( $item ): string {
@@ -175,12 +178,14 @@ class Donors_List_Table extends \WP_List_Table {
 		$page     = $this->get_pagenum();
 		$offset   = ( $page - 1 ) * $per_page;
 
-		$sql = "SELECT * FROM {$table}
+		$sql = "SELECT id, email, phone, first_name, last_name, country, donation_count, total_donated_base, last_donation_at
+				FROM {$table}
 				WHERE {$where_sql}
 				ORDER BY {$orderby} {$order}, id DESC
 				LIMIT %d OFFSET %d";
-		$query_args  = array_merge( $args, [ $per_page, $offset ] );
-		$this->items = $wpdb->get_results( $wpdb->prepare( $sql, $query_args ), ARRAY_A );
+		$query_args   = array_merge( $args, [ $per_page, $offset ] );
+		$this->items  = $wpdb->get_results( $wpdb->prepare( $sql, $query_args ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		$this->totals = Donor::totals_by_currency( array_column( $this->items, 'id' ) );
 
 		$this->set_pagination_args( [
 			'total_items' => $total,
@@ -224,53 +229,58 @@ class Donors_List_Table extends \WP_List_Table {
 	}
 
 	// -------------------------------------------------------------------------
-	// Bulk actions
+	// Actions: run on load-{page}, before any output, so they can redirect.
 	// -------------------------------------------------------------------------
 
-	public function process_bulk_action(): void {
+	public static function handle_actions(): void {
+		if ( ! current_user_can( 'pd_manage_donations' ) ) {
+			return;
+		}
+		$base = admin_url( 'admin.php?page=pd-donors' );
+
 		// Single-item delete via row action link.
-		if (
-			isset( $_GET['action'], $_GET['id'], $_GET['_wpnonce'] ) &&
-			'delete' === $_GET['action'] &&
-			wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ), 'pd_delete_donor_' . (int) $_GET['id'] )
-		) {
-			$this->delete_donors( [ (int) $_GET['id'] ] );
-			wp_safe_redirect( add_query_arg( 'pd_msg', 'deleted', admin_url( 'admin.php?page=pd-donors' ) ) );
-			exit;
+		if ( isset( $_GET['action'], $_GET['id'], $_GET['_wpnonce'] ) && 'delete' === $_GET['action'] ) {
+			check_admin_referer( 'pd_delete_donor_' . (int) $_GET['id'] );
+			$ids = [ (int) $_GET['id'] ];
+		} else {
+			$table = new self();
+			if ( 'delete' !== $table->current_action() ) {
+				return;
+			}
+			check_admin_referer( 'bulk-donors' );
+			// The list form is a GET form, so the checked rows arrive in the query string.
+			$ids = array_values( array_filter( array_map( 'absint', (array) ( $_REQUEST['donor'] ?? [] ) ) ) );
 		}
 
-		$action = $this->current_action();
-		if ( 'delete' !== $action ) {
-			return;
-		}
-
-		check_admin_referer( 'bulk-' . $this->_args['plural'] );
-
-		$ids = array_map( 'absint', (array) ( $_POST['donor'] ?? [] ) );
-		if ( empty( $ids ) ) {
-			return;
-		}
-
-		$this->delete_donors( $ids );
-		wp_safe_redirect( add_query_arg( 'pd_msg', 'deleted', admin_url( 'admin.php?page=pd-donors' ) ) );
+		[ $deleted, $kept ] = self::delete_donors( $ids );
+		wp_safe_redirect( add_query_arg( [ 'pd_msg' => 'deleted', 'pd_deleted' => $deleted, 'pd_kept' => $kept ], $base ) );
 		exit;
 	}
 
-	private function delete_donors( array $ids ): void {
+	/**
+	 * Deletes donors who have no donations. A donor with donations is kept:
+	 * deleting them only cut the link (their name, email and phone stay on each
+	 * donation) and a returning gift re-created them, so it erased nothing.
+	 *
+	 * @return array{0: int, 1: int} deleted, kept
+	 */
+	private static function delete_donors( array $ids ): array {
 		global $wpdb;
-		if ( empty( $ids ) ) {
-			return;
+		$ids = array_values( array_filter( array_map( 'intval', $ids ) ) );
+		if ( ! $ids ) {
+			return [ 0, 0 ];
 		}
 		$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
-		// Unlink donor_id from any donations they had (keep donation records).
-		$wpdb->query( $wpdb->prepare(
-			"UPDATE {$wpdb->prefix}pd_donations SET donor_id = NULL WHERE donor_id IN ({$placeholders})",
+		$with_gifts   = array_map( 'intval', $wpdb->get_col( $wpdb->prepare(
+			"SELECT DISTINCT donor_id FROM {$wpdb->prefix}pd_donations WHERE donor_id IN ({$placeholders})",
 			$ids
-		) );
-		$wpdb->query( $wpdb->prepare(
-			"DELETE FROM {$wpdb->prefix}pd_donors WHERE id IN ({$placeholders})",
-			$ids
-		) );
+		) ) );
+		$free = array_values( array_diff( $ids, $with_gifts ) );
+		if ( $free ) {
+			$in = implode( ',', array_fill( 0, count( $free ), '%d' ) );
+			$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->prefix}pd_donors WHERE id IN ({$in})", $free ) );
+		}
+		return [ count( $free ), count( $ids ) - count( $free ) ];
 	}
 
 	public function no_items(): void {
