@@ -16,7 +16,7 @@ $period        = $campaign ? $campaign->get_period_for_donation( $donation->get_
 if ( $period ) {
 	$campaign_name .= ' — ' . $period->get_label();
 }
-$amount_text   = \PesaDonations\Utils\Money::format( $donation->get_amount(), $donation->get_currency() ); // Escaped where printed.
+$amount_text   = \PesaDonations\Utils\Money::given( $donation->get_amount(), $donation->get_currency(), $donation->get_original_amount(), $donation->get_original_currency() ); // Escaped where printed.
 $donor_name    = $donation->get_donor_name() ?: __( '(no name)', 'pesa-donations' );
 $donor_email   = $donation->get_donor_email() ?: __( '(no email)', 'pesa-donations' );
 $edit_url      = admin_url( 'admin.php?page=pd-donation-edit&id=' . $donation->get_id() );

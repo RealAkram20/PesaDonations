@@ -866,10 +866,23 @@ class Shortcodes {
 
 				<?php if ( $donation && $is_completed ) : ?>
 					<div class="pd-thanks__amount">
+						<?php
+						// The amount the donor chose; when it was converted, the charge follows on its own line.
+						$shown_amount   = $donation->get_original_amount() ?? $donation->get_amount();
+						$shown_currency = $donation->get_original_currency() ?: $donation->get_currency();
+						?>
 						<span class="pd-thanks__amount-value">
-							<?php echo esc_html( number_format( $donation->get_amount(), Sanitizer::is_zero_decimal( $donation->get_currency() ) ? 0 : 2 ) ); ?>
-							<span class="pd-thanks__amount-currency"><?php echo esc_html( $donation->get_currency() ); ?></span>
+							<?php echo esc_html( number_format( $shown_amount, Sanitizer::is_zero_decimal( $shown_currency ) ? 0 : 2 ) ); ?>
+							<span class="pd-thanks__amount-currency"><?php echo esc_html( $shown_currency ); ?></span>
 						</span>
+						<?php if ( $shown_currency !== $donation->get_currency() ) : ?>
+							<span class="pd-thanks__amount-target">
+								<?php
+								/* translators: %s: amount with currency */
+								echo esc_html( sprintf( __( 'charged as %s', 'pesa-donations' ), \PesaDonations\Utils\Money::format( $donation->get_amount(), $donation->get_currency() ) ) );
+								?>
+							</span>
+						<?php endif; ?>
 						<?php if ( $campaign_name ) : ?>
 							<span class="pd-thanks__amount-target">
 								<?php printf(

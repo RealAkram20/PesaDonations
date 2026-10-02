@@ -18,10 +18,23 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit;
 }
 
+// Another copy of PesaDonations is still installed in another folder (a zip
+// uploaded under a different folder name installs beside the old one). It
+// uses the same tables, jobs and role: removing this copy leaves them all.
+if ( ! function_exists( 'get_plugins' ) ) {
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+}
+foreach ( get_plugins() as $pd_file => $pd_data ) {
+	if ( WP_UNINSTALL_PLUGIN !== $pd_file && 'pesa-donations.php' === basename( (string) $pd_file ) && 'PesaDonations' === ( $pd_data['Name'] ?? '' ) ) {
+		return;
+	}
+}
+unset( $pd_file, $pd_data );
+
 function pd_uninstall_site(): void {
 	global $wpdb;
 
-	foreach ( [ 'pd_daily_fx_rates', 'pd_purge_gateway_logs', 'pd_daily_campaign_status', 'pd_hourly_campaign_cycles', 'pd_send_cycle_reminders', 'pd_reconcile_payments' ] as $hook ) {
+	foreach ( [ 'pd_daily_fx_rates', 'pd_purge_gateway_logs', 'pd_daily_campaign_status', 'pd_hourly_campaign_cycles', 'pd_send_cycle_reminders', 'pd_reconcile_payments', 'pd_refresh_exchange_rates' ] as $hook ) {
 		wp_clear_scheduled_hook( $hook );
 	}
 

@@ -938,6 +938,21 @@
 }
 .pd-input-group .pd-input { border-radius: 0 var(--pd-radius-sm) var(--pd-radius-sm) 0 !important; }
 
+/* Currency choice and the "you will be charged" line under the amount. */
+.pd-currency-field { margin: 0 0 14px !important; max-width: 360px; }
+.pd-amount-convert {
+	margin: 8px 0 0 !important;
+	font-size: 13px !important;
+	line-height: 1.5 !important;
+	color: var(--pd-ink-muted) !important;
+}
+.pd-amount-convert a {
+	color: var(--pd-ink-muted) !important;
+	font-size: 12px !important;
+	text-decoration: underline !important;
+	white-space: nowrap;
+}
+
 /* ---- Toggle ------------------------------------------------------------- */
 .pd-checkout__toggle-org {
 	display: flex;

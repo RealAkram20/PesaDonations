@@ -57,6 +57,10 @@ class Donations_Export {
 			__( 'Phone', 'pesa-donations' ),
 			__( 'Amount', 'pesa-donations' ),
 			__( 'Currency', 'pesa-donations' ),
+			__( 'Given as', 'pesa-donations' ),
+			__( 'Counted toward campaign', 'pesa-donations' ),
+			__( 'Counted currency', 'pesa-donations' ),
+			__( 'Exchange rate', 'pesa-donations' ),
 			__( 'Status', 'pesa-donations' ),
 			__( 'Gateway', 'pesa-donations' ),
 			__( 'Payment method', 'pesa-donations' ),
@@ -77,7 +81,7 @@ class Donations_Export {
 		$after_id = 0;
 		do {
 			$rows = $wpdb->get_results( $wpdb->prepare(
-				"SELECT id, created_at, merchant_reference, campaign_id, donor_name, donor_email, donor_phone, amount, currency,
+				"SELECT id, created_at, merchant_reference, campaign_id, donor_name, donor_email, donor_phone, amount, currency, original_amount, original_currency, amount_base, base_currency, fx_rate,
 				        status, gateway, payment_method, is_anonymous, environment, is_organization, wants_updates,
 				        referral_source, donor_address
 				 FROM {$wpdb->prefix}pd_donations
@@ -113,6 +117,10 @@ class Donations_Export {
 					$r['donor_phone'],
 					number_format( (float) $r['amount'], 2, '.', '' ),
 					$r['currency'],
+					null !== $r['original_amount'] ? number_format( (float) $r['original_amount'], 2, '.', '' ) . ' ' . $r['original_currency'] : '',
+					number_format( (float) $r['amount_base'], 2, '.', '' ),
+					(string) $r['base_currency'],
+					(string) $r['base_currency'] !== (string) $r['currency'] ? rtrim( rtrim( number_format( (float) $r['fx_rate'], 10, '.', '' ), '0' ), '.' ) : '',
 					$r['status'],
 					$r['gateway'],
 					$r['payment_method'],

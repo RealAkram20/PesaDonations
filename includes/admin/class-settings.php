@@ -5,8 +5,13 @@ namespace PesaDonations\Admin;
 
 use PesaDonations\Payments\Pesapal\Pesapal_Auth;
 use PesaDonations\Payments\Pesapal\Pesapal_Gateway;
+use PesaDonations\Utils\Currencies;
+use PesaDonations\Utils\Exchange_Rates;
 
 class Settings {
+
+	/** Local currencies of the PesaPal countries in East Africa, and USD. */
+	private const LOCAL_CURRENCIES = [ 'UGX', 'KES', 'TZS', 'RWF', 'USD' ];
 
 	/** Stored secrets: never printed into the page; a blank box keeps the saved value. */
 	private const SECRETS = [ 'pd_pesapal_consumer_secret', 'pd_paypal_client_secret' ];
@@ -36,6 +41,9 @@ class Settings {
 			Pesapal_Gateway::forget_ipn();
 			$args['pd_ipn'] = ( new Pesapal_Gateway() )->ensure_ipn_registered() ? 'ok' : 'failed';
 		}
+		if ( isset( $_POST['pd_refresh_rates'] ) ) {
+			$args['pd_rates'] = Exchange_Rates::refresh() ? 'ok' : 'failed';
+		}
 
 		if ( $errors ) {
 			set_transient( 'pd_settings_errors_' . get_current_user_id(), $errors, 5 * MINUTE_IN_SECONDS );
@@ -60,6 +68,11 @@ class Settings {
 			echo 'ok' === $_GET['pd_ipn']
 				? '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'PesaPal IPN registered.', 'pesa-donations' ) . '</p></div>'
 				: '<div class="notice notice-error"><p>' . esc_html__( 'PesaPal did not register the IPN. Check the environment and keys, then try again. The gateway log has PesaPal\'s answer.', 'pesa-donations' ) . '</p></div>';
+		}
+		if ( isset( $_GET['pd_rates'] ) ) {
+			echo 'ok' === $_GET['pd_rates']
+				? '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Exchange rates updated.', 'pesa-donations' ) . '</p></div>'
+				: '<div class="notice notice-error"><p>' . esc_html__( 'The exchange rates could not be fetched. The previous rates are kept; the daily job will try again.', 'pesa-donations' ) . '</p></div>';
 		}
 		// phpcs:enable
 	}
@@ -176,12 +189,56 @@ class Settings {
 	}
 
 	private function render_general(): void {
-		$this->select( 'pd_default_currency', __( 'Default Currency', 'pesa-donations' ), [
-			'UGX' => 'UGX – Ugandan Shilling',
-			'KES' => 'KES – Kenyan Shilling',
-			'TZS' => 'TZS – Tanzanian Shilling',
-			'USD' => 'USD – US Dollar',
-		] );
+		$local   = Currencies::local();
+		$options = '';
+		foreach ( self::LOCAL_CURRENCIES as $code ) {
+			$options .= '<option value="' . esc_attr( $code ) . '"' . selected( $local, $code, false ) . '>' . esc_html( $code . ' — ' . Currencies::name( $code ) ) . '</option>';
+		}
+		$this->row(
+			'<label for="pd_default_currency">' . esc_html__( 'Local currency', 'pesa-donations' ) . '</label>',
+			'<select name="pd_default_currency" id="pd_default_currency">' . $options . '</select>'
+			. '<p class="description">' . esc_html__( 'What your PesaPal account charges and pays out in. Gifts in a currency PesaPal cannot charge are converted to it.', 'pesa-donations' ) . '</p>'
+		);
+
+		$this->row(
+			esc_html__( 'Currency choice', 'pesa-donations' ),
+			'<input type="hidden" name="pd_currency_choice" value="0" />'
+			. '<label><input type="checkbox" name="pd_currency_choice" value="1" ' . checked( Currencies::choice_enabled(), true, false ) . ' /> '
+			. esc_html__( 'Donors can choose the currency they give in', 'pesa-donations' ) . '</label>'
+		);
+
+		$offered = Currencies::offered();
+		$boxes   = '<input type="hidden" name="pd_enabled_currencies_sent" value="1" />';
+		foreach ( Currencies::groups() as $group => $codes ) {
+			$boxes .= '<fieldset class="pd-currency-group"><legend>' . esc_html( $group ) . '</legend>';
+			foreach ( $codes as $code ) {
+				$boxes .= '<label><input type="checkbox" name="pd_enabled_currencies[]" value="' . esc_attr( $code ) . '" ' . checked( in_array( $code, $offered, true ), true, false ) . ' /> '
+					. '<code>' . esc_html( $code ) . '</code> ' . esc_html( Currencies::name( $code ) ) . '</label>';
+			}
+			$boxes .= '</fieldset>';
+		}
+		$this->row( esc_html__( 'Currencies offered', 'pesa-donations' ), $boxes );
+
+		$this->row(
+			esc_html__( 'US dollars', 'pesa-donations' ),
+			'<input type="hidden" name="pd_charge_usd" value="0" />'
+			. '<label><input type="checkbox" name="pd_charge_usd" value="1" ' . checked( '0' !== (string) get_option( 'pd_charge_usd', '1' ), true, false ) . ' /> '
+			. esc_html__( 'Charge dollars as dollars (PesaPal takes USD by card)', 'pesa-donations' ) . '</label>'
+			/* translators: %s: local currency code */
+			. '<p class="description">' . esc_html( sprintf( __( 'Off: dollars are converted to %s like any other currency.', 'pesa-donations' ), $local ) ) . '</p>'
+		);
+
+		$updated = Exchange_Rates::updated_at();
+		$status  = $updated
+			/* translators: %s: date and time */
+			? esc_html( sprintf( __( 'Updated %s.', 'pesa-donations' ), wp_date( 'j M Y, H:i', $updated ) ) )
+			: '<span style="color:#b32d2e;">' . esc_html__( 'Not loaded: donors can give only in each campaign\'s own currency until they are.', 'pesa-donations' ) . '</span>';
+		$this->row(
+			esc_html__( 'Exchange rates', 'pesa-donations' ),
+			'<p style="margin-top:0;">' . $status . ' <a href="' . esc_url( Exchange_Rates::CREDIT_URL ) . '" target="_blank" rel="noopener">Rates By Exchange Rate API</a></p>'
+			. '<button type="submit" name="pd_refresh_rates" value="1" class="button button-secondary">' . esc_html__( 'Save and refresh rates', 'pesa-donations' ) . '</button>'
+			. '<style>.pd-currency-group{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0 0 12px;max-width:760px}.pd-currency-group legend{font-weight:600;margin-bottom:6px}.pd-currency-group label{min-width:210px}</style>'
+		);
 	}
 
 	private function render_pesapal(): void {
@@ -900,7 +957,9 @@ class Settings {
 	private function save(): array {
 		$errors = [];
 		$choice = [
-			'pd_default_currency'    => [ 'UGX', 'KES', 'TZS', 'USD' ],
+			'pd_default_currency'    => self::LOCAL_CURRENCIES,
+			'pd_currency_choice'     => [ '0', '1' ],
+			'pd_charge_usd'          => [ '0', '1' ],
 			'pd_pesapal_environment' => [ 'sandbox', 'production' ],
 			'pd_paypal_environment'  => [ 'sandbox', 'production' ],
 			'pd_paypal_integration'  => [ 'smart_buttons', 'redirect' ],
@@ -949,6 +1008,10 @@ class Settings {
 				/* translators: %s: field label */
 				$errors[] = sprintf( __( '%s: that is not an email address, so the previous one was kept.', 'pesa-donations' ), $label );
 			}
+		}
+		if ( isset( $_POST['pd_enabled_currencies_sent'] ) ) {
+			$picked = array_map( 'strtoupper', array_map( 'sanitize_text_field', (array) wp_unslash( $_POST['pd_enabled_currencies'] ?? [] ) ) );
+			update_option( 'pd_enabled_currencies', array_values( array_intersect( Currencies::codes(), $picked ) ) );
 		}
 		if ( isset( $_POST['pd_terms_url'] ) ) {
 			update_option( 'pd_terms_url', esc_url_raw( trim( (string) wp_unslash( $_POST['pd_terms_url'] ) ) ) );

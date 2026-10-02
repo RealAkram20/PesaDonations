@@ -17,6 +17,7 @@ use PesaDonations\Modules\Dashboard\Dashboard;
 class Plugin {
 
 	private static ?self $instance = null;
+	private bool $running = false;
 
 	private function __construct() {}
 
@@ -28,8 +29,18 @@ class Plugin {
 	}
 
 	public function run(): void {
+		// Once per request: a second installed copy of an older version calls this again.
+		if ( $this->running ) {
+			return;
+		}
+		$this->running = true;
+
 		// Before anything checks a capability: administrators hold every PesaDonations one.
 		( new Roles() )->register();
+		( new Duplicate_Guard() )->register();
+		// Jobs or the role lost (a deactivated duplicate clears the jobs on its way
+		// out): put back on the next admin page, not a day later. Two in-memory checks.
+		add_action( 'admin_init', [ Installer::class, 'ensure_runtime' ] );
 
 		add_action( 'plugins_loaded', [ $this, 'check_wp_version' ] );
 		// Activation does not run on an update, so schema and cron changes ride on the DB version.

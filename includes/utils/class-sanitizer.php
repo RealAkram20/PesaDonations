@@ -5,9 +5,6 @@ namespace PesaDonations\Utils;
 
 class Sanitizer {
 
-	/** Currencies whose smallest unit is the whole unit (no cents). */
-	private const ZERO_DECIMAL = [ 'UGX', 'TZS', 'RWF', 'BIF' ];
-
 	/**
 	 * A donation amount, or null when the input is not a plain positive number.
 	 * "50000", "50,000" and "50 000" are read as 50000; "-10", "1.234,50",
@@ -23,8 +20,9 @@ class Sanitizer {
 		return $amount > 0 ? $amount : null;
 	}
 
+	/** Whole units only (no cents). The list lives in Currencies. */
 	public static function is_zero_decimal( string $currency ): bool {
-		return in_array( strtoupper( $currency ), self::ZERO_DECIMAL, true );
+		return Currencies::is_zero_decimal( $currency );
 	}
 
 	public static function currency( mixed $value ): string {

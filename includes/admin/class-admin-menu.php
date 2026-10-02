@@ -229,7 +229,7 @@ class Admin_Menu {
 
 		// Real money only (sandbox payments excluded once live), per currency.
 		$counted = Donation::counted_sql();
-		$by_cur  = $wpdb->get_results( "SELECT currency, COUNT(*) AS n, SUM(amount) AS total FROM {$wpdb->prefix}pd_donations WHERE {$counted} GROUP BY currency", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$by_cur  = $wpdb->get_results( "SELECT base_currency AS currency, COUNT(*) AS n, SUM(amount_base) AS total FROM {$wpdb->prefix}pd_donations WHERE {$counted} GROUP BY base_currency", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$raised  = array_column( $by_cur, 'total', 'currency' );
 		$count   = array_sum( array_map( 'intval', array_column( $by_cur, 'n' ) ) );
 

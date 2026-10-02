@@ -1,6 +1,6 @@
 # ADR-0002: Money is shown per currency and never converted
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0003 (2026-10-02)
 **Date:** 2026-09-30
 
 ## Context

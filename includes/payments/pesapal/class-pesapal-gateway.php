@@ -5,6 +5,7 @@ namespace PesaDonations\Payments\Pesapal;
 
 use PesaDonations\Models\Donation;
 use PesaDonations\Payments\Abstract_Gateway;
+use PesaDonations\Utils\Currencies;
 use PesaDonations\Utils\Logger;
 use WP_Error;
 
@@ -25,8 +26,9 @@ class Pesapal_Gateway extends Abstract_Gateway {
 		return Pesapal_Auth::environment();
 	}
 
+	/** The local currency and (unless switched off) USD. Other currencies are converted first (Charge_Quote). */
 	public function supports_currency( string $currency ): bool {
-		return in_array( strtoupper( $currency ), [ 'UGX', 'KES', 'TZS', 'USD' ], true );
+		return Currencies::is_chargeable( $currency );
 	}
 
 	/**

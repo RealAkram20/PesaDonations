@@ -44,11 +44,11 @@ ok "$(give verify-a-$RUN@example.com abc)" "422" "amount 'abc' refused"
 ok "$(give verify-a-$RUN@example.com -500)" "422" "negative amount refused"
 REF_SRC=$($WP option get pd_referral_sources --format=json | grep -o '"[^"]*"' | head -1 | tr -d '"')
 E1=verify-1-$RUN@example.com
-code=$(give $E1 "50,000" --data-urlencode "currency=USD" --data-urlencode "address1=Plot 5" --data-urlencode "city=Kampala" \
+code=$(give $E1 "50,000" --data-urlencode "address1=Plot 5" --data-urlencode "city=Kampala" \
 	--data-urlencode "how_heard=$REF_SRC" --data-urlencode "updates=1" --data-urlencode "is_org=1")
 ok "$code" "200" "'50,000' accepted"
 has "$(cat D:/pdtest/perf/give.json)" 'pay.example.test' "redirect URL from the gateway"
-ok "$(row $E1 "CONCAT(status,'|',currency,'|',amount,'|',environment)")" "pending|UGX|50000.00|sandbox" "row: pending, base currency (USD tamper ignored), 50000, sandbox"
+ok "$(row $E1 "CONCAT(status,'|',currency,'|',amount,'|',environment)")" "pending|UGX|50000.00|sandbox" "row: pending, UGX, 50000, sandbox (currency choice: see currency-check.sh)"
 ok "$(row $E1 "CONCAT(referral_source,'|',wants_updates,'|',is_organization)")" "$REF_SRC|1|1" "row: referral, updates and organisation stored"
 has "$(row $E1 donor_address)" 'Kampala' "row: address stored"
 TRK=$(row $E1 order_tracking_id); REF=$(row $E1 merchant_reference)
@@ -109,7 +109,7 @@ echo "== sandbox payments on a live site"
 dev=$($WP eval 'PesaDonations\Models\Campaign_Totals::flush(); echo PesaDonations\Models\Campaign::get(11)->get_raised_amount();')
 $WP option update pd_pesapal_environment production >/dev/null
 live=$($WP eval 'PesaDonations\Models\Campaign_Totals::flush(); echo PesaDonations\Models\Campaign::get(11)->get_raised_amount();')
-sand=$(SQL "SELECT COALESCE(SUM(amount),0) FROM wp_pd_donations WHERE campaign_id=11 AND status='completed' AND currency='UGX' AND environment='sandbox'")
+sand=$(SQL "SELECT COALESCE(SUM(amount_base),0) FROM wp_pd_donations WHERE campaign_id=11 AND status='completed' AND base_currency='UGX' AND environment='sandbox'")
 ok "$(php -r "echo round($dev - $live, 2);" 2>/dev/null || /d/xampp/php/php.exe -r "echo round($dev - $live, 2);")" "$(/d/xampp/php/php.exe -r "echo round($sand, 2);")" "production totals leave out exactly the sandbox money"
 $WP option update pd_pesapal_environment sandbox >/dev/null
 

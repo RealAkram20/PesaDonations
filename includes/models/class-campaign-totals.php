@@ -86,7 +86,7 @@ class Campaign_Totals {
 			$period     = $c->get_current_period();
 			if ( $period ) {
 				$windows[] = "SELECT %d AS cid, COALESCE(SUM(amount_base), 0) AS raised, COUNT(DISTINCT " . Donation::WHO_SQL . ") AS donors
-					FROM {$table} WHERE campaign_id = %d AND currency = %s AND {$counted} AND created_at BETWEEN %s AND %s";
+					FROM {$table} WHERE campaign_id = %d AND base_currency = %s AND {$counted} AND created_at BETWEEN %s AND %s";
 				array_push( $args, $id, $id, $c->get_base_currency(), $period->window_start_sql(), $period->window_end_sql() );
 			} else {
 				$once[ $id ] = $c->get_base_currency();
@@ -97,9 +97,9 @@ class Campaign_Totals {
 		if ( $once ) {
 			$in   = implode( ',', array_fill( 0, count( $once ), '%d' ) );
 			$rows = array_merge( $rows, $wpdb->get_results( $wpdb->prepare(
-				"SELECT campaign_id AS cid, currency, COALESCE(SUM(amount_base), 0) AS raised, COUNT(DISTINCT " . Donation::WHO_SQL . ") AS donors
+				"SELECT campaign_id AS cid, base_currency AS currency, COALESCE(SUM(amount_base), 0) AS raised, COUNT(DISTINCT " . Donation::WHO_SQL . ") AS donors
 				 FROM {$table} WHERE campaign_id IN ({$in}) AND {$counted}
-				 GROUP BY campaign_id, currency",
+				 GROUP BY campaign_id, base_currency",
 				array_keys( $once )
 			), ARRAY_A ) );
 		}
@@ -109,7 +109,9 @@ class Campaign_Totals {
 
 		foreach ( $rows as $r ) {
 			$id = (int) $r['cid'];
-			// One-time campaigns come back per currency: keep the campaign's own.
+			// One-time campaigns come back per counted currency: keep the campaign's own
+			// (a gift is counted in its campaign's currency since 1.3; older gifts in
+			// another currency stay counted in theirs, as before).
 			if ( isset( $r['currency'] ) && $r['currency'] !== ( $once[ $id ] ?? '' ) ) {
 				continue;
 			}

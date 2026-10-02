@@ -71,9 +71,13 @@ project's own rules add to this block; they do not switch it off.**
   does not run on an update; `maybe_upgrade()` on `init` does.
 - **Nothing that inserts posts or builds permalinks runs on `plugins_loaded`**
   (WordPress 7.1 fatals). See the `wordpress` skill, "Plugin code".
-- **Money is DECIMAL and PHP floats today, and never converted between
-  currencies** (`amount_base` equals `amount`). Do not add currencies together;
-  the dashboard totals the default currency only.
+- **Money is DECIMAL and PHP floats today. A gift is converted once, at
+  checkout, and never again** (`docs/adr/0003`, superseding 0002): `amount` +
+  `currency` = charged, `original_*` = what the donor chose, `amount_base` in
+  `base_currency` = what it counts for, `fx_rate` fixed. Totals add
+  `amount_base` for one `base_currency` only; never add currencies together and
+  never re-convert history with today's rate. Rates come from
+  `Utils\Exchange_Rates` (daily, credited "Rates By Exchange Rate API").
 - **Testing:** Rio's Local site `tec` (`C:\Users\reala\Local Sites\tec`, WP-CLI
   via Local's own PHP and `run\<id>\conf\php\php.ini`). Back up its database to
   D: first, never run destructive loops while he is using it, install the

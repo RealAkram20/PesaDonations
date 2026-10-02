@@ -202,8 +202,14 @@ class Campaign {
 		return (bool) $this->meta( '_pd_allow_anonymous' );
 	}
 
+	/**
+	 * Whether donors may give in another currency here: on site-wide (Settings →
+	 * General) unless this campaign is set to its own currency only. The 1.2
+	 * per-campaign "Allow Donor to Switch Currency" box (saved off on nearly
+	 * every campaign) no longer applies.
+	 */
 	public function allows_currency_switch(): bool {
-		return (bool) $this->meta( '_pd_allow_currency_switch' );
+		return \PesaDonations\Utils\Currencies::choice_enabled() && '1' !== (string) $this->meta( '_pd_single_currency' );
 	}
 
 	public function show_progress_bar(): bool {
@@ -339,7 +345,7 @@ class Campaign {
 		// Same rule as the progress bar: real money, in the campaign's own currency.
 		$sql  = "SELECT COALESCE(SUM(amount_base), 0) AS raised, COUNT(DISTINCT " . Donation::WHO_SQL . ") AS donors, COUNT(*) AS cnt
 				 FROM {$wpdb->prefix}pd_donations
-				 WHERE campaign_id = %d AND currency = %s AND " . Donation::counted_sql();
+				 WHERE campaign_id = %d AND base_currency = %s AND " . Donation::counted_sql();
 		$args = [ $this->get_id(), $this->get_base_currency() ];
 		if ( '' !== $from ) {
 			$sql   .= ' AND created_at >= %s';

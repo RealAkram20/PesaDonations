@@ -6,6 +6,8 @@ pass=0; fail=0
 ok() { if [ "$1" = "$2" ]; then pass=$((pass+1)); echo "PASS $3"; else fail=$((fail+1)); echo "FAIL $3: got [$1] want [$2]"; fi; }
 crons() { $WP cron event list --fields=hook --format=csv 2>/dev/null | grep -c '^pd_'; }
 
+# A fresh backup every run: restoring an older copy silently dropped rows other suites had added since.
+/d/xampp/mysql/bin/mysqldump.exe -u root -h 127.0.0.1 -P 3399 pdwp_test > D:/pdtest/backup/pdwp_test-before-uninstall.sql
 before=$(SQL "SELECT COUNT(*) FROM wp_pd_donations")
 ok "$( [ "$(crons)" -gt 0 ] && echo yes )" "yes" "active plugin has its jobs scheduled"
 

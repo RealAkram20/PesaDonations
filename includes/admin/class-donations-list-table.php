@@ -141,7 +141,13 @@ class Donations_List_Table extends \WP_List_Table {
 	}
 
 	protected function column_amount( $item ): string {
-		return '<strong>' . esc_html( Money::format( (float) $item['amount'], (string) $item['currency'] ) ) . '</strong>';
+		$out = '<strong>' . esc_html( Money::format( (float) $item['amount'], (string) $item['currency'] ) ) . '</strong>';
+		// Given in another currency and converted before charging: show what the donor chose.
+		if ( null !== $item['original_amount'] && '' !== (string) $item['original_currency'] ) {
+			/* translators: %s: amount with currency */
+			$out .= '<br><span style="color:#646970;font-size:12px;">' . esc_html( sprintf( __( 'given as %s', 'pesa-donations' ), Money::format( (float) $item['original_amount'], (string) $item['original_currency'] ) ) ) . '</span>';
+		}
+		return $out;
 	}
 
 	protected function column_gateway( $item ): string {
@@ -371,7 +377,7 @@ class Donations_List_Table extends \WP_List_Table {
 
 		// The columns the list shows, not d.* (message and address are text columns).
 		$sql = "SELECT d.id, d.merchant_reference, d.campaign_id, d.donor_name, d.donor_email, d.donor_phone, d.is_anonymous,
-				       d.amount, d.currency, d.gateway, d.payment_method, d.status, d.environment, d.created_at
+				       d.amount, d.currency, d.original_amount, d.original_currency, d.gateway, d.payment_method, d.status, d.environment, d.created_at
 				FROM {$table} d
 				WHERE {$where_sql}
 				ORDER BY {$orderby} {$order}, d.id {$order}

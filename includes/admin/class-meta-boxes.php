@@ -8,6 +8,7 @@ use PesaDonations\Models\Campaign;
 use PesaDonations\Models\Campaign_Period;
 use PesaDonations\Models\Campaign_Schedule;
 use PesaDonations\Models\Campaign_Totals;
+use PesaDonations\Utils\Currencies;
 use PesaDonations\Utils\Sanitizer;
 
 class Meta_Boxes {
@@ -109,12 +110,12 @@ class Meta_Boxes {
 
 		$this->field_text( $post, '_pd_goal_amount',   __( 'Goal Amount', 'pesa-donations' ), 'number' );
 
-		$this->field_select( $post, '_pd_base_currency', __( 'Base Currency', 'pesa-donations' ), [
-			'UGX' => 'UGX',
-			'KES' => 'KES',
-			'TZS' => 'TZS',
-			'USD' => 'USD',
-		] );
+		// Goal, minimum and progress are kept in this currency; gifts in others are converted into it.
+		$currencies = [];
+		foreach ( Currencies::all() as $code => $name ) {
+			$currencies[ $code ] = $code . ' — ' . $name;
+		}
+		$this->field_select( $post, '_pd_base_currency', __( 'Base Currency', 'pesa-donations' ), $currencies );
 	}
 
 	/**
@@ -444,7 +445,7 @@ class Meta_Boxes {
 		$this->field_text( $post, '_pd_minimum_amount', __( 'Minimum Donation Amount', 'pesa-donations' ), 'number' );
 		$this->field_checkbox( $post, '_pd_allow_recurring',      __( 'Allow Recurring Donations', 'pesa-donations' ) );
 		$this->field_checkbox( $post, '_pd_allow_anonymous',      __( 'Allow Anonymous Donations', 'pesa-donations' ) );
-		$this->field_checkbox( $post, '_pd_allow_currency_switch', __( 'Allow Donor to Switch Currency', 'pesa-donations' ) );
+		$this->field_checkbox( $post, '_pd_single_currency',      __( 'Accept the base currency only (no currency choice)', 'pesa-donations' ) );
 		$this->field_checkbox( $post, '_pd_checkout_require_address', __( 'Require Mailing Address at Checkout', 'pesa-donations' ) );
 
 		echo '<p><strong>' . esc_html__( 'Suggested Amounts (JSON)', 'pesa-donations' ) . '</strong></p>';
@@ -669,7 +670,7 @@ class Meta_Boxes {
 		}
 		if ( isset( $_POST['_pd_base_currency'] ) ) {
 			$currency = Sanitizer::currency( wp_unslash( $_POST['_pd_base_currency'] ) );
-			if ( 3 === strlen( $currency ) ) {
+			if ( Currencies::is_known( $currency ) ) {
 				$put( '_pd_base_currency', $currency );
 			}
 		}
@@ -695,7 +696,7 @@ class Meta_Boxes {
 		$put( '_pd_minimum_amount', null !== $min && $min > 0 ? $min : '' );
 
 		$checkbox_fields = [
-			'_pd_allow_recurring', '_pd_allow_anonymous', '_pd_allow_currency_switch',
+			'_pd_allow_recurring', '_pd_allow_anonymous', '_pd_single_currency',
 			'_pd_show_progress_bar', '_pd_show_donor_count', '_pd_checkout_require_address',
 		];
 		foreach ( $checkbox_fields as $key ) {

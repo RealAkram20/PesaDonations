@@ -71,6 +71,10 @@ class Donation {
 			'created_at'         => $now,
 			'updated_at'         => $now,
 		], $data );
+		// amount_base is in base_currency; unsaid, it is the charged amount in the charged currency.
+		if ( empty( $insert['base_currency'] ) && ! empty( $insert['currency'] ) ) {
+			$insert['base_currency'] = $insert['currency'];
+		}
 
 		$result = $wpdb->insert( $wpdb->prefix . 'pd_donations', $insert );
 		return $result ? $wpdb->insert_id : false;
@@ -181,6 +185,9 @@ class Donation {
 	public function get_donor_id(): int  { return (int) ( $this->data['donor_id'] ?? 0 ); }
 	public function get_amount(): float  { return (float) $this->data['amount']; }
 	public function get_currency(): string { return (string) $this->data['currency']; }
+	/** What the donor chose, when it was converted before charging (else null). */
+	public function get_original_amount(): ?float { return isset( $this->data['original_amount'] ) ? (float) $this->data['original_amount'] : null; }
+	public function get_original_currency(): string { return (string) ( $this->data['original_currency'] ?? '' ); }
 	public function get_status(): string { return (string) $this->data['status']; }
 	public function get_gateway(): string { return (string) $this->data['gateway']; }
 	public function get_merchant_reference(): string { return (string) $this->data['merchant_reference']; }

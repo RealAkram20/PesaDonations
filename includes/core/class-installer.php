@@ -5,11 +5,13 @@ namespace PesaDonations\Core;
 
 use PesaDonations\Modules\Dashboard\Dashboard;
 use PesaDonations\Payments\Pesapal\Pesapal_IPN;
+use PesaDonations\Utils\Currencies;
+use PesaDonations\Utils\Exchange_Rates;
 
 class Installer {
 
 	private const DB_VERSION_OPTION = 'pd_db_version';
-	private const DB_VERSION        = '1.2.2';
+	private const DB_VERSION        = '1.3.0';
 	private const LOCK_OPTION       = 'pd_install_lock';
 
 	/** Page options the plugin needs, and what each page holds. */
@@ -32,8 +34,10 @@ class Installer {
 		foreach ( array_merge( array_keys( self::PAGES ), [ self::DB_VERSION_OPTION ] ) as $option ) {
 			wp_cache_delete( $option, 'options' );
 		}
+		$previous = (string) get_option( self::DB_VERSION_OPTION, '0' );
 		try {
 			self::create_tables();
+			self::migrate( $previous );
 			self::create_pages();
 			self::schedule_crons();
 			self::set_defaults();
@@ -149,7 +153,8 @@ class Installer {
 			amount DECIMAL(15,2) NOT NULL,
 			currency CHAR(3) NOT NULL,
 			amount_base DECIMAL(15,2) NOT NULL,
-			fx_rate DECIMAL(15,8) NOT NULL DEFAULT 1,
+			base_currency CHAR(3) NULL,
+			fx_rate DECIMAL(20,10) NOT NULL DEFAULT 1,
 			original_amount DECIMAL(15,2) NULL,
 			original_currency CHAR(3) NULL,
 			gateway VARCHAR(30) NOT NULL DEFAULT 'pesapal',
@@ -278,9 +283,9 @@ class Installer {
 
 	/** Scheduled jobs and the role with its capabilities, restored if missing. Cheap: both read autoloaded options. */
 	public static function ensure_runtime(): void {
-		if ( ! wp_next_scheduled( Pesapal_IPN::RECONCILE_HOOK ) || ! wp_next_scheduled( 'pd_hourly_campaign_cycles' ) ) {
-			self::schedule_crons();
-		}
+		// Every job, not a sample: 1.1.0's deactivation clears the two daily ones
+		// and leaves the hourly ones, so checking only those missed it.
+		self::schedule_crons(); // Schedules only what is missing; reads the autoloaded cron option.
 		$admin = get_role( 'administrator' );
 		if ( ! get_role( 'pd_donations_manager' ) || ( $admin && ! $admin->has_cap( 'pd_manage_donations' ) ) ) {
 			Roles::install();
@@ -296,6 +301,7 @@ class Installer {
 			'pd_daily_campaign_status'   => 'daily',
 			'pd_hourly_campaign_cycles'  => 'hourly',
 			Pesapal_IPN::RECONCILE_HOOK  => 'hourly',
+			Exchange_Rates::HOOK         => 'daily',
 		];
 		foreach ( $events as $hook => $recurrence ) {
 			if ( ! wp_next_scheduled( $hook ) ) {
@@ -306,17 +312,43 @@ class Installer {
 
 	/** Every hook the plugin schedules, for deactivation and uninstall. */
 	public static function cron_hooks(): array {
-		return [ 'pd_daily_fx_rates', 'pd_purge_gateway_logs', 'pd_daily_campaign_status', 'pd_hourly_campaign_cycles', 'pd_send_cycle_reminders', Pesapal_IPN::RECONCILE_HOOK ];
+		return [ 'pd_daily_fx_rates', 'pd_purge_gateway_logs', 'pd_daily_campaign_status', 'pd_hourly_campaign_cycles', 'pd_send_cycle_reminders', Pesapal_IPN::RECONCILE_HOOK, Exchange_Rates::HOOK ];
 	}
 
 	// -------------------------------------------------------------------------
 	// Default Options
 	// -------------------------------------------------------------------------
 
+	/**
+	 * Data changes a schema update cannot make. Each step runs once, when the
+	 * stored version is older than the one that introduced it.
+	 */
+	private static function migrate( string $previous ): void {
+		global $wpdb;
+		if ( '0' === $previous ) {
+			return; // A first install has nothing to move.
+		}
+
+		if ( version_compare( $previous, '1.3.0', '<' ) ) {
+			// Before 1.3 amount_base was the charged amount, in the charged currency.
+			// Saying so keeps every existing total exactly as it was.
+			$wpdb->query( "UPDATE {$wpdb->prefix}pd_donations SET base_currency = currency WHERE base_currency IS NULL" ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+			// The 1.0 default offered four currencies; the full list is the new default.
+			$enabled = array_map( 'strtoupper', (array) get_option( 'pd_enabled_currencies', [] ) );
+			sort( $enabled );
+			if ( [] === $enabled || [ 'KES', 'TZS', 'UGX', 'USD' ] === $enabled ) {
+				update_option( 'pd_enabled_currencies', Currencies::codes() );
+			}
+		}
+	}
+
 	private static function set_defaults(): void {
 		$defaults = [
 			'pd_default_currency'       => 'UGX',
-			'pd_enabled_currencies'     => [ 'UGX', 'KES', 'TZS', 'USD' ],
+			'pd_enabled_currencies'     => Currencies::codes(),
+			'pd_currency_choice'        => '1',
+			'pd_charge_usd'             => '1',
 			'pd_minimum_amount_ugx'     => 5000,
 			'pd_country_currency_map'   => [
 				'UG' => 'UGX',

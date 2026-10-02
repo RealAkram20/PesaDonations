@@ -7,8 +7,12 @@ use PesaDonations\Models\Campaign;
 use PesaDonations\Models\Donation;
 use PesaDonations\Models\Donor;
 use PesaDonations\Models\Open_Donation;
+use PesaDonations\Payments\Charge_Quote;
 use PesaDonations\Payments\Gateway_Manager;
 use PesaDonations\Utils\Countries;
+use PesaDonations\Utils\Currencies;
+use PesaDonations\Utils\Exchange_Rates;
+use PesaDonations\Utils\Money;
 use PesaDonations\Utils\Sanitizer;
 
 class Ajax_Handler {
@@ -72,7 +76,7 @@ class Ajax_Handler {
 				wp_send_json_error( [ 'message' => __( 'Open donations are not accepted at the moment.', 'pesa-donations' ) ], 404 );
 			}
 			$base_currency = Open_Donation::currency();
-			$currency      = $base_currency;
+			$choices       = Charge_Quote::choices( $base_currency, Currencies::choice_enabled() );
 			$min           = Open_Donation::min_amount();
 		} else {
 			$campaign = Campaign::get( $campaign_id );
@@ -80,29 +84,71 @@ class Ajax_Handler {
 				wp_send_json_error( [ 'message' => __( 'Campaign not found.', 'pesa-donations' ) ], 404 );
 			}
 			$base_currency = $campaign->get_base_currency();
-			$currency      = $this->allowed_currency( $campaign, Sanitizer::currency( $_POST['currency'] ?? '' ) );
+			$choices       = Charge_Quote::choices( $base_currency, $campaign->allows_currency_switch(), array_column( $campaign->get_sponsorship_plans(), 'currency' ) );
 			$min           = $campaign->get_minimum_amount();
+		}
+
+		// The donor's currency, from the list this checkout offers. Never swapped
+		// silently: 50 typed as euros must not be charged as 50 shillings.
+		$currency = Sanitizer::currency( $_POST['currency'] ?? '' ) ?: $base_currency;
+		if ( ! in_array( $currency, $choices, true ) ) {
+			wp_send_json_error( [
+				'message' => $choices
+					/* translators: %s: currency code */
+					? sprintf( __( 'Donations here cannot be made in %s today. Please choose another currency.', 'pesa-donations' ), $currency )
+					: __( 'Donations here need today\'s exchange rate, which is not available right now. Please try again later.', 'pesa-donations' ),
+			], 422 );
 		}
 
 		$amount = Sanitizer::amount( $_POST['amount'] ?? '', $currency );
 		if ( null === $amount ) {
 			wp_send_json_error( [ 'message' => __( 'Enter the amount as a number, for example 50000.', 'pesa-donations' ) ], 422 );
 		}
-		// The minimum is set in the base currency; it is compared only in it.
-		if ( $currency === $base_currency && $amount < $min ) {
+
+		$quote = Charge_Quote::make( $amount, $currency, $base_currency );
+		if ( is_wp_error( $quote ) ) {
+			wp_send_json_error( [ 'message' => $quote->get_error_message() ], 503 );
+		}
+
+		// The minimum is set in the campaign's currency and checked on what the gift counts for.
+		if ( $quote->base_amount() < $min ) {
+			$about = Exchange_Rates::rate( $base_currency, $currency );
 			wp_send_json_error( [
 				'message' => sprintf(
 					/* translators: %s: minimum amount with currency */
 					__( 'Minimum donation is %s.', 'pesa-donations' ),
-					number_format( $min ) . ' ' . $base_currency
+					Money::format( $min, $base_currency )
+						. ( $currency !== $base_currency && $about ? ' (' . sprintf(
+							/* translators: %s: amount with currency */
+							__( 'about %s', 'pesa-donations' ),
+							Money::format( Money::round_up( $min * $about, $currency ), $currency )
+						) . ')' : '' )
 				),
 			], 422 );
+		}
+
+		// A converted gift is charged what the donor was shown, to the smallest unit.
+		// If the day's rate changed since the page loaded, say the new figure and stop.
+		if ( $quote->is_converted() ) {
+			$seen = Sanitizer::amount( $_POST['quote'] ?? '', $quote->charge_currency() );
+			$unit = 10 ** -Currencies::decimals( $quote->charge_currency() );
+			if ( null === $seen || abs( $seen - $quote->charge_amount() ) > $unit + 1e-9 ) {
+				wp_send_json_error( [
+					'code'    => 'quote',
+					'message' => sprintf(
+						/* translators: %s: amount with currency */
+						__( 'The exchange rate has been updated: you will be charged %s. Press Continue to Payment again to accept it.', 'pesa-donations' ),
+						Money::format( $quote->charge_amount(), $quote->charge_currency() )
+					),
+					'rates'   => Exchange_Rates::for_codes( [ $currency, $quote->charge_currency(), $base_currency ] ),
+				], 409 );
+			}
 		}
 
 		// The gateway is settled before anything is written.
 		$gateway     = Sanitizer::gateway( $_POST['gateway'] ?? 'pesapal' );
 		$gateway_obj = $gateway ? Gateway_Manager::get( $gateway ) : null;
-		if ( ! $gateway_obj || ! $gateway_obj->is_enabled() || ! $gateway_obj->supports_currency( $currency ) ) {
+		if ( ! $gateway_obj || ! $gateway_obj->is_enabled() || ! $gateway_obj->supports_currency( $quote->charge_currency() ) ) {
 			wp_send_json_error( [ 'message' => __( 'This payment method is not available for this currency.', 'pesa-donations' ) ], 400 );
 		}
 
@@ -143,12 +189,9 @@ class Ajax_Handler {
 			'country'    => $country,
 		] );
 
-		$donation_id = Donation::create( [
+		$donation_id = Donation::create( $quote->fields() + [
 			'campaign_id'   => $campaign_id,
 			'donor_id'      => $donor->get_id(),
-			'amount'        => $amount,
-			'currency'      => $currency,
-			'amount_base'   => $amount, // No currency conversion exists; totals never add currencies together.
 			'gateway'       => $gateway,
 			'environment'   => $gateway_obj->get_environment(),
 			'donor_name'    => $anonymous ? '' : trim( $first_name . ' ' . $last_name ),
@@ -191,22 +234,6 @@ class Ajax_Handler {
 		}
 
 		wp_send_json_success( $result );
-	}
-
-	/**
-	 * The campaign's own currency, unless the campaign lets donors switch or a
-	 * sponsorship plan is priced in another one. The browser does not choose.
-	 */
-	private function allowed_currency( Campaign $campaign, string $requested ): string {
-		$base    = $campaign->get_base_currency();
-		$allowed = [ $base ];
-		if ( $campaign->allows_currency_switch() ) {
-			$allowed = array_merge( $allowed, array_map( 'strtoupper', (array) get_option( 'pd_enabled_currencies', [] ) ) );
-		}
-		foreach ( $campaign->get_sponsorship_plans() as $plan ) {
-			$allowed[] = $plan['currency'];
-		}
-		return in_array( $requested, $allowed, true ) ? $requested : $base;
 	}
 
 	/**

@@ -10,6 +10,7 @@ use PesaDonations\Utils\Logger;
  * The daily background jobs scheduled by Installer:
  *   - pd_purge_gateway_logs    → trim wp_pd_gateway_logs and the log files older than retention
  *   - pd_daily_campaign_status → flip end-dated campaigns to "ended", full ones to "reached"
+ *   - pd_refresh_exchange_rates → the day's rates for donors giving in another currency (1.3)
  * (pd_daily_fx_rates was removed in 1.2.0: nothing read its result, and the
  * provider now requires a key. The installer clears the old schedule.)
  */
@@ -18,6 +19,7 @@ class Cron {
 	public function register(): void {
 		add_action( 'pd_purge_gateway_logs',    [ $this, 'purge_logs' ] );
 		add_action( 'pd_daily_campaign_status', [ $this, 'update_campaign_status' ] );
+		add_action( \PesaDonations\Utils\Exchange_Rates::HOOK, [ \PesaDonations\Utils\Exchange_Rates::class, 'refresh' ] );
 	}
 
 	// -------------------------------------------------------------------------

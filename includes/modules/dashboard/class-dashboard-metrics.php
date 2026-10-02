@@ -15,10 +15,11 @@ use PesaDonations\Models\Open_Donation;
 /**
  * The numbers behind the staff dashboard. Read-only.
  *
- * Money is summed in the default currency only. Donations are stored in the
- * currency they were given in and are never converted, so adding UGX to USD
- * would invent a figure; other currencies are listed beside the total, never
- * added to it. Dates are site-local like created_at, and a donation is placed
+ * Money is summed as counted: each gift's amount_base, in its base_currency
+ * (its campaign's currency, converted at checkout at the day's rate since 1.3;
+ * docs/adr/0003). The totals are the default currency's; gifts counted in
+ * another currency (a USD campaign, or a gift from before 1.3) are listed
+ * beside them, never added. Dates are site-local like created_at, and a donation is placed
  * by when it was made (created_at), the same rule the campaign periods use.
  *
  * Sized for a few hundred campaigns and a few hundred thousand donations: the
@@ -118,7 +119,7 @@ class Dashboard_Metrics {
 		$row = $wpdb->get_row( $wpdb->prepare(
 			"SELECT COALESCE(SUM(amount_base), 0) AS raised, COUNT(*) AS gifts, COUNT(DISTINCT " . self::WHO . ") AS donors
 			 FROM {$this->table}
-			 WHERE " . Donation::counted_sql() . " AND currency = %s AND created_at BETWEEN %s AND %s",
+			 WHERE " . Donation::counted_sql() . " AND base_currency = %s AND created_at BETWEEN %s AND %s",
 			$this->currency,
 			$from,
 			$to
@@ -142,7 +143,7 @@ class Dashboard_Metrics {
 			        SUM(CASE WHEN campaign_id <> 0 THEN amount_base ELSE 0 END) AS campaign_amount,
 			        COUNT(*) AS gifts
 			 FROM {$this->table}
-			 WHERE " . Donation::counted_sql() . " AND currency = %s AND created_at BETWEEN %s AND %s
+			 WHERE " . Donation::counted_sql() . " AND base_currency = %s AND created_at BETWEEN %s AND %s
 			 GROUP BY k",
 			$this->currency,
 			$w['from']->format( 'Y-m-d 00:00:00' ),
@@ -179,7 +180,7 @@ class Dashboard_Metrics {
 		$rows = $wpdb->get_results( $wpdb->prepare(
 			"SELECT campaign_id, SUM(amount_base) AS amount, COUNT(*) AS gifts
 			 FROM {$this->table}
-			 WHERE " . Donation::counted_sql() . " AND currency = %s AND created_at BETWEEN %s AND %s
+			 WHERE " . Donation::counted_sql() . " AND base_currency = %s AND created_at BETWEEN %s AND %s
 			 GROUP BY campaign_id
 			 ORDER BY amount DESC",
 			$this->currency,
@@ -239,10 +240,10 @@ class Dashboard_Metrics {
 	private function other_currencies( array $w ): array {
 		global $wpdb;
 		$rows = $wpdb->get_results( $wpdb->prepare(
-			"SELECT currency, SUM(amount_base) AS amount, COUNT(*) AS gifts
+			"SELECT base_currency AS currency, SUM(amount_base) AS amount, COUNT(*) AS gifts
 			 FROM {$this->table}
-			 WHERE " . Donation::counted_sql() . " AND currency <> %s AND created_at BETWEEN %s AND %s
-			 GROUP BY currency ORDER BY gifts DESC",
+			 WHERE " . Donation::counted_sql() . " AND base_currency <> %s AND created_at BETWEEN %s AND %s
+			 GROUP BY base_currency ORDER BY gifts DESC",
 			$this->currency,
 			$w['from']->format( 'Y-m-d 00:00:00' ),
 			$w['to']
@@ -272,7 +273,7 @@ class Dashboard_Metrics {
 			        END), 0) AS returning_donors
 			 FROM ( SELECT " . self::WHO . " AS who, MAX(donor_id) AS did, MAX(donor_email) AS em, MAX(donor_phone) AS ph
 			        FROM {$this->table}
-			        WHERE " . Donation::counted_sql() . " AND currency = %s AND created_at BETWEEN %s AND %s
+			        WHERE " . Donation::counted_sql() . " AND base_currency = %s AND created_at BETWEEN %s AND %s
 			        GROUP BY who HAVING who IS NOT NULL ) r",
 			$from,
 			$from,
@@ -290,7 +291,7 @@ class Dashboard_Metrics {
 			"SELECT " . self::WHO . " AS who, MAX(donor_name) AS name, MAX(donor_email) AS email, MAX(donor_phone) AS phone,
 			        MAX(is_anonymous) AS anonymous, SUM(amount_base) AS amount, COUNT(*) AS gifts
 			 FROM {$this->table}
-			 WHERE " . Donation::counted_sql() . " AND currency = %s AND created_at BETWEEN %s AND %s
+			 WHERE " . Donation::counted_sql() . " AND base_currency = %s AND created_at BETWEEN %s AND %s
 			 GROUP BY who HAVING who IS NOT NULL
 			 ORDER BY amount DESC LIMIT 5",
 			$this->currency,
@@ -530,7 +531,7 @@ class Dashboard_Metrics {
 			                       MAX(p.is_anonymous) AS anonymous, SUM(p.amount_base) AS amount, COUNT(*) AS gifts
 			                FROM ( SELECT " . self::WHO . " AS who, donor_name, donor_email, donor_phone, is_anonymous, amount_base
 			                       FROM {$this->table}
-			                       WHERE campaign_id = %d AND " . Donation::counted_sql() . " AND currency = %s AND created_at BETWEEN %s AND %s ) p
+			                       WHERE campaign_id = %d AND " . Donation::counted_sql() . " AND base_currency = %s AND created_at BETWEEN %s AND %s ) p
 			                WHERE p.who IS NOT NULL AND p.who NOT IN (
 			                       SELECT " . self::WHO . " FROM {$this->table}
 			                       WHERE campaign_id = %d AND " . Donation::counted_sql() . " AND created_at BETWEEN %s AND %s

@@ -7,13 +7,15 @@ use PesaDonations\Models\Campaign_Totals;
 use PesaDonations\Models\Donation;
 use PesaDonations\Models\Donor;
 use PesaDonations\Models\Open_Donation;
+use PesaDonations\Models\Campaign;
+use PesaDonations\Payments\Charge_Quote;
 use PesaDonations\Utils\Countries;
+use PesaDonations\Utils\Currencies;
 use PesaDonations\Utils\Sanitizer;
 use WP_Error;
 
 class Donation_Editor {
 
-	private const CURRENCIES = [ 'UGX', 'KES', 'TZS', 'USD', 'EUR', 'GBP' ];
 
 	/** A refused save: the message, and the values as typed, shown again by render(). */
 	private static string $error  = '';
@@ -204,7 +206,7 @@ class Donation_Editor {
 											<?php else : ?>
 												<input type="text" inputmode="decimal" name="amount" id="pd_amount" value="<?php echo esc_attr( (string) $data['amount'] ); ?>" class="regular-text" required />
 												<select name="currency" aria-label="<?php esc_attr_e( 'Currency', 'pesa-donations' ); ?>" style="margin-left:8px;">
-													<?php foreach ( array_unique( array_merge( self::CURRENCIES, [ (string) $data['currency'] ] ) ) as $cur ) : ?>
+													<?php foreach ( array_unique( array_merge( Currencies::codes(), [ (string) $data['currency'] ] ) ) as $cur ) : ?>
 														<option value="<?php echo esc_attr( $cur ); ?>" <?php selected( $data['currency'], $cur ); ?>>
 															<?php echo esc_html( $cur ); ?>
 														</option>
@@ -420,7 +422,7 @@ class Donation_Editor {
 			$amount   = (float) $current['amount'];
 		} else {
 			$currency = Sanitizer::currency( wp_unslash( $_POST['currency'] ?? '' ) );
-			if ( ! in_array( $currency, array_merge( self::CURRENCIES, [ (string) ( $current['currency'] ?? '' ) ] ), true ) ) {
+			if ( ! in_array( $currency, array_merge( Currencies::codes(), [ (string) ( $current['currency'] ?? '' ) ] ), true ) ) {
 				return new WP_Error( 'pd_currency', __( 'Choose a currency.', 'pesa-donations' ) );
 			}
 			$amount = Sanitizer::amount( wp_unslash( $_POST['amount'] ?? '' ), $currency );
@@ -479,10 +481,24 @@ class Donation_Editor {
 			'message'       => sanitize_textarea_field( wp_unslash( $_POST['message'] ?? '' ) ),
 			'created_at'    => $created,
 		];
+		// What the gift counts for, in the campaign's currency. An edit that keeps
+		// the amount's basis keeps the rate stored with it; history never moves
+		// with today's rate. A new or re-based gift uses today's (else counts in
+		// its own currency, as before 1.3).
+		$base_currency = $campaign_id && Campaign::get( $campaign_id ) ? Campaign::get( $campaign_id )->get_base_currency() : Open_Donation::currency();
+		$same_basis    = $existing
+			&& (string) $current['currency'] === $currency
+			&& (string) ( $current['base_currency'] ?? $current['currency'] ) === $base_currency;
+		if ( $same_basis ) {
+			$fields['amount_base']   = round( $amount * (float) $current['fx_rate'], 2 );
+			$fields['base_currency'] = $base_currency;
+		} else {
+			$fields += Charge_Quote::counted( $amount, $currency, $base_currency );
+		}
+
 		if ( ! $locked ) {
 			$fields['amount']      = $amount;
 			$fields['currency']    = $currency;
-			$fields['amount_base'] = $amount;
 			$gateway               = sanitize_key( wp_unslash( $_POST['gateway'] ?? 'manual' ) );
 			$fields['gateway']     = in_array( $gateway, [ 'manual', 'pesapal', 'paypal' ], true ) ? $gateway : 'manual';
 			$ref = mb_substr( sanitize_text_field( wp_unslash( $_POST['merchant_reference'] ?? '' ) ), 0, 100 );

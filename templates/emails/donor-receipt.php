@@ -14,7 +14,7 @@ $campaign_name = $campaign
 	? ( $campaign->get_beneficiary_name() ?: $campaign->get_title() )
 	: \PesaDonations\Models\Open_Donation::label();
 $period        = $campaign ? $campaign->get_period_for_donation( $donation->get_created_at() ) : null;
-$amount_text   = \PesaDonations\Utils\Money::format( $donation->get_amount(), $donation->get_currency() ); // Escaped where printed.
+$amount_text   = \PesaDonations\Utils\Money::given( $donation->get_amount(), $donation->get_currency(), $donation->get_original_amount(), $donation->get_original_currency() ); // Escaped where printed.
 $date_text     = mysql2date( get_option( 'date_format', 'F j, Y' ), $donation->get_completed_at() ?: current_time( 'mysql' ) );
 $reference     = $donation->get_merchant_reference();
 ?>

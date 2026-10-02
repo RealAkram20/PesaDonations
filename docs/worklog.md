@@ -273,3 +273,85 @@ birthdays in public page data; erasure of a donor; minimums per currency; the Pa
   29 files overlapping this work with different designs (percent-based plans, organisation columns, a privacy class,
   a single-donation template). Not merged, not touched. Which branch production runs, and how to reconcile, is Rio's.
 
+### 2026-10-01 — 1.2.1: a second installed copy is safe (live site had two)
+
+**Status:** done in the working tree, zip built; not committed
+- Rio, with a screenshot of the Plugins screen: "when i updated the plugin it does not update the existing plugin
+  but created another one on one of the live websites". Rows: PesaDonations 1.1.0 and 1.2.0, both active.
+- Cause: the 1.2.0 zip unpacks as `pesa-donations/`, the site's 1.1.0 lives in another folder; WordPress treats a
+  different folder as a different plugin. The second copy to load ran the first one's code (constants already
+  defined). 1.1.0's `uninstall.php` drops the shared tables, so Delete on the old row would have erased the donations.
+- 1.2.1: `pesa-donations.php` stops when another copy is loaded and says which runs;
+  `Core\Duplicate_Guard` names other copies on the Plugins screen and Dashboard and, on `pre_uninstall_plugin`,
+  renames another copy's `uninstall.php` (or stops the deletion); `uninstall.php` does nothing while another copy is
+  installed; `Plugin::run()` runs once; `Installer::ensure_runtime()` on `admin_init` reschedules every missing job.
+- Verified: `D:\pdtest\duplicate-check.sh` 15/15 (both load orders; deleting either copy; the mutant without the hook
+  loses all 5,020 donations); `live-recovery-rehearsal.sh` 9/9 from the live state (1.1.0 + commit 68c8988, both
+  active → upload 1.2.1 over it → deactivate and delete the old copy); `verify.sh` 51/51, admin 19, public 16,
+  uninstall 15/15 (one unexplained failure in the first of four runs, not reproduced); 90 PHP files lint clean.
+- Zip: `D:\PesaDonations-builds\pesa-donations-1.2.1.zip` (tree 8f2fb0f).
+- Not verified: the deletion through the Plugins screen in a browser (WP-CLI's `plugin uninstall` calls the same
+  `uninstall_plugin()`); a host where the plugin folder is not writable (the guard then refuses the deletion).
+- Open: whether that live site's old copy is `main` 1.1.0 or `audit-fixes-1.1.0` (both say 1.1.0).
+
+### 2026-10-01 — "Its dashboard does not show, it takes me to the ordinary WordPress dashboard" (live site, 1.2.1 installed)
+
+**Status:** diagnosed; no code change needed
+- Reproduced from the live site's real starting point (`tests/harness/fresh-live-rehearsal.sh`: a database that has
+  only ever had 1.1.0, schema `1.0.0`; the first 1.2.0 zip uploaded and activated as an admin; then 1.2.1 uploaded
+  over it). While the old copy is still active and its folder sorts before `pesa-donations/` (`PesaDonations-main`,
+  any capitalised name), the old 1.1.0 code is the one running: the Donations menu shows 1.1.0's page and
+  `/dashboard/` is a 404, which WordPress core (`wp_redirect_admin_locations()`) sends to `/wp-admin/`. The red
+  "Two copies of PesaDonations are active" notice is on screen in that state.
+- After deactivating and deleting the old copy, with no other step: the schema upgrade (1.0.0 → 1.2.2) rebuilds the
+  permalinks, the Donations menu goes to `/dashboard/` and the staff dashboard opens; donations intact. With the old
+  folder sorting after (`pesadonations/`), the dashboard works at every step.
+- Missed: the previous rehearsal started from a database 1.2.x had already upgraded and never opened `/dashboard/`.
+
+
+### 2026-10-02 — 1.3.0: donors choose their currency; converted gifts count toward goals
+
+**Status:** done in the working tree; zip built; not committed
+**Owns:** new `includes/utils/class-currencies.php`, `class-exchange-rates.php`; checkout (`class-ajax-handler.php`,
+`templates/sponsorship-checkout.php`, `assets/js/pd-public.js`, `pd-public.css`); installer schema/cron; totals and
+dashboard queries (`base_currency`); settings General tab; campaign editor currency box; donation editor, list,
+export, receipts, thank-you page; `docs/adr/0003` (supersedes 0002); `CLAUDE.md` money rule.
+
+**What this is:** Rio: "we want for the people to be able to select any curency they want we want the most popular
+international currencies and east africcan currencies". Asked, answered: a currency PesaPal cannot charge is
+converted to the site's local currency at the day's rate and charged in it (USD still charged as USD); converted
+gifts count toward the campaign goal, the rate stored with the gift.
+
+**Built (1.3.0, DB 1.3.0):**
+- `Utils\Currencies` (23 currencies, East Africa then international; decimals; offered / chargeable),
+  `Utils\Exchange_Rates` (daily job, stored table, refused when older than 7 days, catch-up scheduled, never fetched
+  while a donor waits), `Payments\Charge_Quote` (given / charged / counted, fixed at checkout).
+- Checkout: currency picker (grouped), quick picks converted to round amounts, "You will be charged … (1 EUR = …
+  UGX, rate of …)" with the rate credit, minimum shown in both currencies; the request carries the shown charge and
+  the server answers 409 with the new figure if the day's rate moved. An unknown or unoffered currency is refused,
+  never charged as shillings.
+- Totals, dashboard and admin card count `amount_base` per `base_currency`; upgrade back-fills
+  `base_currency = currency` (every old total unchanged) and widens the offered list from the old four.
+- Settings → General: local currency, choice on/off, currencies offered, "charge dollars as dollars", rate status
+  and "Save and refresh rates". Campaign editor: 23 base currencies; "Accept the base currency only" replaces the
+  1.2 switch box (saved off on nearly every campaign, so it would have locked them all).
+- Receipts, alerts, the donation list and the thank-you page show "50.00 EUR (charged 207,350 UGX)"; the export
+  adds given, counted, counted currency and rate. Manual gifts: an edit keeping the basis keeps its stored rate.
+- `docs/adr/0003` supersedes 0002; `CLAUDE.md` money rule rewritten.
+
+**Verified (throwaway site, PesaPal stand-in):** `upgrade-totals-check.sh` 8/8 (40 campaigns' raised and donor
+counts identical across the upgrade); `currency-check.sh` 24/24 over HTTP (EUR converted and charged in UGX,
+USD charged as USD and counted in UGX, quote refusals, unknown currency, minimum, IPN completes both and the bar grows
+by exactly the counted amounts, single-currency campaign, site switch off, USD charging off, unoffered currency,
+stale rates refused then accepted after refresh); four mutants each turned a check red (one survived first: the
+"unknown currency" test was passing on the minimum; amount raised to 50,000); Chrome: `currency-browser.js` 16/16
+(desktop and 390 px, no overflow, request carries EUR and the shown charge, payment window opens),
+`currency-admin-check.js` 8/8; regression `verify.sh` 51/51, admin 19, public 16 (no failures), uninstall 15/15,
+duplicate 15/15, schedule 48/48; 93 PHP files lint clean.
+
+**Not verified:** a real PesaPal sandbox order in UGX for a converted gift, and whether PesaPal's page offers mobile
+money for a USD order; the card bank's own conversion (the donor's statement may differ slightly from our figure).
+Not deployed to Local "tec": its database was not running (site down), so it was left alone.
+
+**Zip:** `D:\PesaDonations-builds\pesa-donations-1.3.0.zip` (tree 4f047c8).
+

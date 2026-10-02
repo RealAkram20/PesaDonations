@@ -17,7 +17,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 /** @var \PesaDonations\Models\Campaign|null $campaign Null for an open donation (see donation-form.php). */
 
 use PesaDonations\Models\Open_Donation;
+use PesaDonations\Payments\Charge_Quote;
 use PesaDonations\Utils\Countries;
+use PesaDonations\Utils\Currencies;
+use PesaDonations\Utils\Exchange_Rates;
 
 $is_open             = null === $campaign;
 $is_sponsorship_type = ! $is_open && $campaign->is_sponsorship();
@@ -38,9 +41,25 @@ $referrals           = array_filter( array_map( 'strval', (array) get_option( 'p
 $checkout_id         = 'pd-checkout-' . ( $is_open ? 'open' : $campaign->get_id() );
 $field_id            = static fn( string $name ): string => esc_attr( $checkout_id . '-' . $name );
 
+// Currencies the donor may give in here (only those that can be charged and counted today).
+$switchable = ! $has_plans && ( $is_open ? Currencies::choice_enabled() : $campaign->allows_currency_switch() );
+$choices    = Charge_Quote::choices( $currency, $switchable, $has_plans ? array_column( $plans, 'currency' ) : [] );
+$rate_codes = array_unique( array_merge( $choices, Currencies::chargeable(), [ $currency ] ) );
+$decimals   = [];
+foreach ( $rate_codes as $code ) {
+	$decimals[ $code ] = Currencies::decimals( $code );
+}
+
 $config = [
 	'campaignId'     => $is_open ? Open_Donation::CAMPAIGN_ID : $campaign->get_id(),
 	'currency'       => $currency,
+	'choices'        => $choices,
+	'chargeable'     => Currencies::chargeable(),
+	'local'          => Currencies::local(),
+	'rates'          => Exchange_Rates::for_codes( $rate_codes ),
+	'ratesDate'      => Exchange_Rates::updated_at() ? wp_date( 'j M Y', Exchange_Rates::updated_at() ) : '',
+	'decimals'       => $decimals,
+	'suggested'      => array_values( array_map( static fn( array $s ): float => (float) $s['amount'], $suggested_amounts ) ),
 	'plans'          => $has_plans ? $plans : [],
 	'hasPlans'       => $has_plans,
 	'minAmount'      => $min_amount,
@@ -64,8 +83,23 @@ $config = [
 		'fix'        => __( 'Please check the highlighted fields.', 'pesa-donations' ),
 		'generic'    => __( 'Something went wrong. Please try again.', 'pesa-donations' ),
 		'network'    => __( 'Network error. Please check your connection and try again.', 'pesa-donations' ),
+		/* translators: %s: amount with currency */
+		'about'      => __( 'about %s', 'pesa-donations' ),
+		/* translators: 1: amount with currency, 2: exchange rate such as "1 EUR = 4,147 UGX", 3: date */
+		'charged'    => __( 'You will be charged %1$s (%2$s, rate of %3$s).', 'pesa-donations' ),
+		'noRate'     => __( 'Today\'s exchange rate is not available for this currency. Please choose another.', 'pesa-donations' ),
 	],
 ];
+
+/** The "you will be charged" line for a converted currency, with the rate source's credit. */
+$conversion_line = static function (): void {
+	?>
+	<p class="pd-amount-convert" x-show="conversionText" x-cloak style="display:none;" aria-live="polite">
+		<span x-text="conversionText"></span>
+		<a href="<?php echo esc_url( Exchange_Rates::CREDIT_URL ); ?>" target="_blank" rel="noopener">Rates By Exchange Rate API</a>
+	</p>
+	<?php
+};
 ?>
 
 <div class="pd-checkout" id="<?php echo esc_attr( $checkout_id ); ?>"
@@ -233,22 +267,46 @@ $config = [
 				</div>
 				<p class="pd-error-msg" x-show="errors.amount" x-text="errors.amount"></p>
 			</div>
+			<?php $conversion_line(); ?>
 		</div>
 	<?php else : ?>
 		<div class="pd-checkout__section pd-checkout__section--amount">
 			<h3 class="pd-checkout__section-title"><?php esc_html_e( 'Donation Amount', 'pesa-donations' ); ?></h3>
+
+			<?php if ( count( $choices ) > 1 ) : ?>
+				<div class="pd-form-field pd-currency-field">
+					<label class="pd-label" for="<?php echo $field_id( 'currency' ); ?>"><?php esc_html_e( 'Currency', 'pesa-donations' ); ?></label>
+					<select id="<?php echo $field_id( 'currency' ); ?>" class="pd-input pd-input--select" x-model="currency" @change="onCurrencyChange()" autocomplete="transaction-currency">
+						<?php
+						$grouped = [];
+						foreach ( Currencies::groups() as $group => $codes ) {
+							$in = array_values( array_intersect( $codes, $choices ) );
+							if ( $in ) {
+								$grouped[ $group ] = $in;
+							}
+						}
+						foreach ( $grouped as $group => $codes ) :
+							?>
+							<optgroup label="<?php echo esc_attr( $group ); ?>">
+								<?php foreach ( $codes as $code ) : ?>
+									<option value="<?php echo esc_attr( $code ); ?>" <?php selected( $currency, $code ); ?>><?php echo esc_html( $code . ' — ' . Currencies::name( $code ) ); ?></option>
+								<?php endforeach; ?>
+							</optgroup>
+						<?php endforeach; ?>
+					</select>
+				</div>
+			<?php endif; ?>
+
 			<?php if ( $suggested_amounts ) : ?>
-				<div class="pd-amount-buttons">
-					<?php foreach ( $suggested_amounts as $sug ) :
-						$sug_amount = (float) $sug['amount'];
-					?>
+				<div class="pd-amount-buttons" x-show="quickPicks.length">
+					<?php /* Rendered in the chosen currency; the first paint shows the campaign's own amounts. */ ?>
+					<template x-for="a in quickPicks" :key="currency + a">
 						<button type="button"
 						        class="pd-amount-btn"
-						        :class="{ 'pd-amount-btn--active': isAmount(<?php echo esc_attr( (string) wp_json_encode( $sug_amount ) ); ?>) }"
-						        @click="setAmount(<?php echo esc_attr( (string) wp_json_encode( $sug_amount ) ); ?>)">
-							<?php echo esc_html( number_format( $sug_amount ) . ' ' . ( $sug['currency'] ?? $currency ) ); ?>
-						</button>
-					<?php endforeach; ?>
+						        :class="{ 'pd-amount-btn--active': isAmount(a) }"
+						        @click="setAmount(a)"
+						        x-text="pickLabel(a)"></button>
+					</template>
 				</div>
 			<?php endif; ?>
 			<div class="pd-amount-custom">
@@ -256,12 +314,14 @@ $config = [
 					<?php $suggested_amounts ? esc_html_e( 'Or enter amount', 'pesa-donations' ) : esc_html_e( 'Enter amount', 'pesa-donations' ); ?>
 				</label>
 				<div class="pd-input-group">
-					<span class="pd-input-group__prefix"><?php echo esc_html( $currency ); ?></span>
+					<span class="pd-input-group__prefix" x-text="currency"><?php echo esc_html( $currency ); ?></span>
 					<input type="text" inputmode="decimal" id="<?php echo $field_id( 'amount' ); ?>" x-model="formData.amount"
+					       x-ref="amountInput"
 					       :class="{ 'pd-input--error': errors.amount }"
 					       class="pd-input" />
 				</div>
 				<p class="pd-error-msg" x-show="errors.amount" x-text="errors.amount"></p>
+				<?php $conversion_line(); ?>
 			</div>
 		</div>
 	<?php endif; ?>

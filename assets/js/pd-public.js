@@ -437,7 +437,15 @@ function pdCheckout(configJson) {
 	return {
 		// Config
 		campaignId:    config.campaignId || 0,
-		currency:      config.currency   || 'UGX',
+		baseCurrency:  config.currency   || 'UGX',   // the campaign's: goal, minimum, quick picks
+		currency:      config.currency   || 'UGX',   // the donor's choice
+		choices:       Array.isArray(config.choices) ? config.choices : [],
+		chargeable:    Array.isArray(config.chargeable) ? config.chargeable : [],
+		local:         config.local || config.currency || 'UGX',
+		rates:         config.rates || {},           // units per 1 USD
+		ratesDate:     config.ratesDate || '',
+		decimals:      config.decimals || {},
+		suggested:     Array.isArray(config.suggested) ? config.suggested : [],
 		plans:         Array.isArray(config.plans) ? config.plans : [],
 		hasPlans:      !!config.hasPlans,
 		minAmount:     parseFloat(config.minAmount) || 0,
@@ -507,8 +515,111 @@ function pdCheckout(configJson) {
 		},
 
 		formatAmount(n) {
+			return this.fmt(n, this.amountCurrency);
+		},
+
+		/* ---- Currencies: the same arithmetic as Charge_Quote on the server ---- */
+
+		places(code) {
+			return code in this.decimals ? this.decimals[code] : 2;
+		},
+
+		fmt(n, code) {
 			const v = pdNumber(n);
-			return isNaN(v) ? '0' : v.toLocaleString();
+			if (isNaN(v)) return '0';
+			return v.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: this.places(code) });
+		},
+
+		roundTo(v, code) {
+			const f = Math.pow(10, this.places(code));
+			return Math.round((v + Number.EPSILON) * f) / f;
+		},
+
+		roundUp(v, code) {
+			const f = Math.pow(10, this.places(code));
+			return Math.ceil(Math.round(v * f * 1e6) / 1e6) / f;
+		},
+
+		/** Units of `to` per one `from`; null when either rate is missing. */
+		rate(from, to) {
+			if (from === to) return 1;
+			const a = this.rates[from], b = this.rates[to];
+			return a && b ? b / a : null;
+		},
+
+		chargeCurrencyFor(code) {
+			return this.chargeable.includes(code) ? code : this.local;
+		},
+
+		/** { charge, chargeCurrency, base } for an amount in `code`, or null when a rate is missing. */
+		quoteFor(amount, code) {
+			const chargeCurrency = this.chargeCurrencyFor(code);
+			let charge = amount;
+			if (chargeCurrency !== code) {
+				const r = this.rate(code, chargeCurrency);
+				if (r === null) return null;
+				charge = this.roundTo(amount * r, chargeCurrency);
+			}
+			const fx = this.rate(chargeCurrency, this.baseCurrency);
+			if (fx === null) return null;
+			return { charge, chargeCurrency, base: Math.round(charge * fx * 100) / 100 };
+		},
+
+		get quote() {
+			const amt = pdNumber(this.formData.amount);
+			return isNaN(amt) || amt <= 0 ? null : this.quoteFor(amt, this.amountCurrency);
+		},
+
+		get isConverted() {
+			return this.chargeCurrencyFor(this.amountCurrency) !== this.amountCurrency;
+		},
+
+		/** "You will be charged 207,350 UGX (1 EUR = 4,147 UGX, rate of 2 Oct 2026)." Empty when nothing is converted. */
+		get conversionText() {
+			const q = this.quote;
+			if (!this.isConverted || !q) return '';
+			const r = this.rate(this.amountCurrency, q.chargeCurrency);
+			const rateText = '1 ' + this.amountCurrency + ' = '
+				+ r.toLocaleString(undefined, { maximumFractionDigits: r < 1 ? 4 : 2 }) + ' ' + q.chargeCurrency;
+			return say('charged', 'You will be charged %1$s (%2$s, rate of %3$s).')
+				.replace('%1$s', this.fmt(q.charge, q.chargeCurrency) + ' ' + q.chargeCurrency)
+				.replace('%2$s', rateText)
+				.replace('%3$s', this.ratesDate);
+		},
+
+		/** The campaign's minimum in the chosen currency, rounded up; null without a rate. */
+		minIn(code) {
+			const r = this.rate(this.baseCurrency, code);
+			return r === null ? null : this.roundUp(this.minAmount * r, code);
+		},
+
+		/**
+		 * The campaign's quick picks in the chosen currency, rounded to a round
+		 * step (half the leading power of ten: 11 -> 10, 23 -> 25, 207,350 ->
+		 * 200,000), never below the minimum. The button shows what is charged.
+		 */
+		get quickPicks() {
+			if (this.currency === this.baseCurrency) return this.suggested;
+			const r = this.rate(this.baseCurrency, this.currency);
+			if (r === null) return [];
+			const min = this.minIn(this.currency) || 0;
+			const nice = v => {
+				const step = Math.max(1, Math.pow(10, Math.floor(Math.log10(v))) / 2);
+				return Math.round(v / step) * step;
+			};
+			return [...new Set(this.suggested.map(a => nice(a * r)).filter(v => v > 0 && v >= min))];
+		},
+
+		pickLabel(a) {
+			return this.fmt(a, this.currency) + ' ' + this.currency;
+		},
+
+		onCurrencyChange() {
+			// An amount typed in the old currency means something else in the new one.
+			this.formData.amount = '';
+			delete this.errors.amount;
+			this.errors = { ...this.errors };
+			this.$nextTick(() => { if (this.$refs.amountInput) this.$refs.amountInput.focus(); });
 		},
 
 		/** The selected plan's currency; otherwise the plans' shared one; otherwise the campaign's. */
@@ -577,10 +688,19 @@ function pdCheckout(configJson) {
 
 			if (isNaN(amt) || amt <= 0) {
 				errs.amount = say('amount', 'Enter the amount as a number, for example 50000.');
-			} else if (this.amountCurrency === this.currency && amt < this.minAmount) {
-				// The minimum is set in the campaign's currency and applies only in it (as on the server).
-				errs.amount = say('minimum', 'Minimum donation is %s.')
-					.replace('%s', Number(this.minAmount).toLocaleString() + ' ' + this.currency);
+			} else {
+				// The minimum is in the campaign's currency, checked on what the gift counts for (as on the server).
+				const q = this.quoteFor(amt, this.amountCurrency);
+				if (!q) {
+					errs.amount = say('noRate', 'Today\'s exchange rate is not available for this currency. Please choose another.');
+				} else if (q.base < this.minAmount) {
+					let text = this.fmt(this.minAmount, this.baseCurrency) + ' ' + this.baseCurrency;
+					const inChosen = this.amountCurrency !== this.baseCurrency ? this.minIn(this.amountCurrency) : null;
+					if (inChosen !== null) {
+						text += ' (' + say('about', 'about %s').replace('%s', this.fmt(inChosen, this.amountCurrency) + ' ' + this.amountCurrency) + ')';
+					}
+					errs.amount = say('minimum', 'Minimum donation is %s.').replace('%s', text);
+				}
 			}
 
 			if (!f.first_name.trim()) errs.first_name = say('firstName', 'First name is required.');
@@ -616,6 +736,9 @@ function pdCheckout(configJson) {
 			body.append('campaign_id', this.campaignId);
 			body.append('amount',      String(pdNumber(f.amount)));
 			body.append('currency',    this.amountCurrency);
+			// What the donor was shown as the charge: the server refuses to charge anything else.
+			const q = this.quote;
+			if (this.isConverted && q) body.append('quote', String(q.charge));
 			body.append('gateway',     'pesapal');
 			body.append('first_name',  f.first_name.trim());
 			body.append('last_name',   f.last_name.trim());
@@ -677,6 +800,11 @@ function pdCheckout(configJson) {
 				let data = await this.post();
 				if (!data.success && data.data && data.data.code === 'nonce' && await this.refreshNonce()) {
 					data = await this.post();
+				}
+
+				if (!data.success && data.data && data.data.code === 'quote') {
+					// The day's rate changed since the page loaded: show the new charge, let them press again.
+					this.rates = Object.assign({}, this.rates, data.data.rates || {});
 				}
 
 				if (data.success) {
