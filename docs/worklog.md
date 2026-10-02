@@ -311,7 +311,7 @@ birthdays in public page data; erasure of a donor; minimums per currency; the Pa
 
 ### 2026-10-02 — 1.3.0: donors choose their currency; converted gifts count toward goals
 
-**Status:** done in the working tree; zip built; not committed
+**Status:** done; committed 57f0119 on branch `1.2.0` and pushed (no tag); zip built
 **Owns:** new `includes/utils/class-currencies.php`, `class-exchange-rates.php`; checkout (`class-ajax-handler.php`,
 `templates/sponsorship-checkout.php`, `assets/js/pd-public.js`, `pd-public.css`); installer schema/cron; totals and
 dashboard queries (`base_currency`); settings General tab; campaign editor currency box; donation editor, list,
